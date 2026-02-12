@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #000000;
+            overflow: hidden;
+        }
+        #terminal {
+            width: 100%;
+            height: 100%;
+            padding: 4px;
+        }
+        .xterm { height: 100%; width: 100%; }
+        .xterm-viewport { overflow-y: auto !important; }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.js"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        // ─── Terminal Configuration ───
+        const term = new Terminal({
+            cursorBlink: true,
+            cursorStyle: 'block',
+            fontSize: 13,
+            fontFamily: '"SF Mono", Menlo, Monaco, "Courier New", monospace',
+            fontWeight: 400,
+            fontWeightBold: 700,
+            lineHeight: 1.0,
+            letterSpacing: 0,
+            allowProposedApi: true,
+            scrollback: 50000,
+            tabStopWidth: 8,
+            convertEol: false,  // Critical: let PTY handle line endings
+            windowsMode: false,
+            macOptionIsMeta: true,
+            altClickMovesCursor: true,
+            theme: {
+                background: '#000000',
+                foreground: '#ffffff',
+                cursor: '#ffffff',
+                cursorAccent: '#000000',
+                selectionBackground: 'rgba(255, 255, 255, 0.3)',
+                selectionForeground: undefined,
+                selectionInactiveBackground: 'rgba(255, 255, 255, 0.15)',
+                // ANSI colors (standard)
+                black: '#000000',
+                red: '#cd3131',
+                green: '#0dbc79',
+                yellow: '#e5e510',
+                blue: '#2472c8',
+                magenta: '#bc3fbc',
+                cyan: '#11a8cd',
+                white: '#e5e5e5',
+                // ANSI bright colors
+                brightBlack: '#666666',
+                brightRed: '#f14c4c',
+                brightGreen: '#23d18b',
+                brightYellow: '#f5f543',
+                brightBlue: '#3b8eea',
+                brightMagenta: '#d670d6',
+                brightCyan: '#29b8db',
+                brightWhite: '#ffffff',
+            },
+        });
+
+        // ─── Load Addons ───
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+
+        // Unicode 11 for box drawing characters
+        const unicode11Addon = new Unicode11Addon.Unicode11Addon();
+        term.loadAddon(unicode11Addon);
+        term.unicode.activeVersion = '11';
+
+        // Clickable web links
+        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        term.loadAddon(webLinksAddon);
+
+        // Open terminal
+        term.open(document.getElementById('terminal'));
+
+        // WebGL renderer for performance
+        try {
+            const webglAddon = new WebglAddon.WebglAddon();
+            webglAddon.onContextLoss(() => {
+                console.warn('WebGL context lost, falling back to canvas');
+                webglAddon.dispose();
+            });
+            term.loadAddon(webglAddon);
+        } catch (e) {
+            console.warn('WebGL not available, using canvas:', e);
+        }
+
+        // ─── Keyboard Input → Native PTY ───
+        term.onData((data) => {
+            sendToNative(data);
+        });
+
+        term.onBinary((data) => {
+            sendToNative(data);
+        });
+
+        function sendToNative(data) {
+            try {
+                if (window.webkit?.messageHandlers?.terminalInput) {
+                    window.webkit.messageHandlers.terminalInput.postMessage(data);
+                }
+            } catch (e) {
+                console.error('sendToNative error:', e);
+            }
+        }
+
+        // ─── Receive Output from Native PTY ───
+        window.writeToTerminal = function(data) {
+            if (data) {
+                term.write(data);
+            }
+        };
+
+        window.writeToTerminalBytes = function(base64Data) {
+            try {
+                const binary = atob(base64Data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+                term.write(bytes);
+            } catch (e) {
+                console.error('writeToTerminalBytes error:', e);
+            }
+        };
+
+        // ─── Resize Handling with Debounce ───
+        let resizeTimer = null;
+        let lastCols = 0;
+        let lastRows = 0;
+
+        function notifyResize() {
+            const cols = term.cols;
+            const rows = term.rows;
+            
+            // Only notify if size actually changed
+            if (cols === lastCols && rows === lastRows) {
+                return;
+            }
+            
+            lastCols = cols;
+            lastRows = rows;
+
+            try {
+                if (window.webkit?.messageHandlers?.terminalResize) {
+                    window.webkit.messageHandlers.terminalResize.postMessage({
+                        cols: cols,
+                        rows: rows
+                    });
+                    console.log(`Terminal resized: ${cols}x${rows}`);
+                }
+            } catch (e) {
+                console.error('notifyResize error:', e);
+            }
+        }
+
+        function handleResize() {
+            // Clear pending timer
+            if (resizeTimer) {
+                clearTimeout(resizeTimer);
+            }
+            
+            // Fit immediately for visual feedback
+            try {
+                fitAddon.fit();
+            } catch (e) {
+                console.error('fit error:', e);
+            }
+            
+            // Debounce the PTY resize notification (100ms)
+            resizeTimer = setTimeout(() => {
+                notifyResize();
+                resizeTimer = null;
+            }, 100);
+        }
+
+        // ResizeObserver for container size changes
+        const resizeObserver = new ResizeObserver(() => {
+            handleResize();
+        });
+        resizeObserver.observe(document.getElementById('terminal'));
+
+        // Window resize fallback
+        window.addEventListener('resize', handleResize);
+
+        // Initial fit and notify
+        setTimeout(() => {
+            try {
+                fitAddon.fit();
+                notifyResize();
+                term.focus();
+            } catch (e) {
+                console.error('Initial setup error:', e);
+            }
+        }, 100);
+
+        // Focus management
+        term.focus();
+        document.addEventListener('click', () => term.focus());
+        window.addEventListener('focus', () => term.focus());
+
+        // Debug: log terminal info
+        console.log('Terminal initialized');
+        console.log('Initial size:', term.cols, 'x', term.rows);
+    })();
+    </script>
+</body>
+</html>

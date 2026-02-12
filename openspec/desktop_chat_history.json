@@ -1,0 +1,258 @@
+[
+  {
+    "id": "1770880354022-11jn",
+    "timestamp": "2026-02-12T07:12:34.022Z",
+    "filePath": "droid-worker://idle",
+    "content": "Ping",
+    "preview": "Ping",
+    "source": "Droid Worker (idle) > Send"
+  },
+  {
+    "id": "1770878213988-bnkg",
+    "timestamp": "2026-02-12T06:36:53.988Z",
+    "filePath": "droid-worker://idle",
+    "content": "desktop退出时，如果有worker tab，就保存每个workertab对应的session。再下次打开时，自动加载session，继续之前的工作。droid和codex 分别处理，执行时使用对应的session resume命令行",
+    "preview": "desktop退出时，如果有worker tab，就保存每个workertab对应的session。再下次打开时，自动加载session，继续之前的工作。droid和codex 分别处理，执行时使用对",
+    "source": "Droid Worker (idle) > Send"
+  },
+  {
+    "id": "1770878077492-ik5b",
+    "timestamp": "2026-02-12T06:34:37.492Z",
+    "filePath": "droid-worker://idle",
+    "content": "/opsx-new \"1\"",
+    "preview": "/opsx-new \"1\"",
+    "source": "Droid Worker (idle) > New Change"
+  },
+  {
+    "id": "1770876844601-vtid",
+    "timestamp": "2026-02-12T06:14:04.601Z",
+    "filePath": "codex://standalone",
+    "content": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "preview": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "source": "Codex Worker (standalone) > Review按钮"
+  },
+  {
+    "id": "1770875961914-9540",
+    "timestamp": "2026-02-12T05:59:21.914Z",
+    "filePath": "codex://standalone",
+    "content": "现在从codex hook返回回来的结果，中文显示是乱码。请统一使用utf-8的编码",
+    "preview": "现在从codex hook返回回来的结果，中文显示是乱码。请统一使用utf-8的编码",
+    "source": "Codex Worker (standalone) > 输入框"
+  },
+  {
+    "id": "1770875929714-6yed",
+    "timestamp": "2026-02-12T05:58:49.714Z",
+    "filePath": "codex://standalone",
+    "content": "中文是什么编码",
+    "preview": "中文是什么编码",
+    "source": "Codex Worker (standalone) > 输入框"
+  },
+  {
+    "id": "1770875660858-2x3w",
+    "timestamp": "2026-02-12T05:54:20.858Z",
+    "filePath": "codex://standalone",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Codex Worker (standalone) > 输入框"
+  },
+  {
+    "id": "1770875383708-x0hc",
+    "timestamp": "2026-02-12T05:49:43.708Z",
+    "filePath": "codex://standalone",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Codex Worker (standalone) > 输入框"
+  },
+  {
+    "id": "1770864778871-7k8a",
+    "timestamp": "2026-02-12T02:52:58.871Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770860388323-agms",
+    "timestamp": "2026-02-12T01:39:48.323Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770851995583-v48q",
+    "timestamp": "2026-02-11T23:19:55.583Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "Ping",
+    "preview": "Ping",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770851897644-h6tv",
+    "timestamp": "2026-02-11T23:18:17.644Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770823462720-6mly",
+    "timestamp": "2026-02-11T15:24:22.720Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "/opsx-continue",
+    "preview": "/opsx-continue",
+    "source": "Continue Change (codex-review-terminal) > Auto-continue"
+  },
+  {
+    "id": "1770823181327-s3p4",
+    "timestamp": "2026-02-11T15:19:41.327Z",
+    "filePath": "new-change://message",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "New Change > 输入框"
+  },
+  {
+    "id": "1770822030445-370t",
+    "timestamp": "2026-02-11T15:00:30.445Z",
+    "filePath": "continue-change://web-agent-cli-window",
+    "content": "修改了代码吗",
+    "preview": "修改了代码吗",
+    "source": "Continue Change (web-agent-cli-window) > 输入框"
+  },
+  {
+    "id": "1770822003446-8j3i",
+    "timestamp": "2026-02-11T15:00:03.446Z",
+    "filePath": "continue-change://web-agent-cli-window",
+    "content": "init执行命令时，需要等待返回后再执行后续",
+    "preview": "init执行命令时，需要等待返回后再执行后续",
+    "source": "Continue Change (web-agent-cli-window) > 输入框"
+  },
+  {
+    "id": "1770821811785-0mb8",
+    "timestamp": "2026-02-11T14:56:51.785Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770821748090-o5wq",
+    "timestamp": "2026-02-11T14:55:48.090Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770821336913-w7s0",
+    "timestamp": "2026-02-11T14:48:56.913Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "preview": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "source": "Review (codex-review-terminal) > Review按钮"
+  },
+  {
+    "id": "1770820860463-13i2",
+    "timestamp": "2026-02-11T14:41:00.463Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "preview": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "source": "Review (codex-review-terminal) > Review按钮"
+  },
+  {
+    "id": "1770819554576-pdxb",
+    "timestamp": "2026-02-11T14:19:14.576Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "所有tab 界面中增加 Stop按钮，强制终止当前terminal等待状态的返回，标记未 Stoped",
+    "preview": "所有tab 界面中增加 Stop按钮，强制终止当前terminal等待状态的返回，标记未 Stoped",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770819476659-3xyz",
+    "timestamp": "2026-02-11T14:17:56.659Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "请严格评审修改的代码",
+    "preview": "请严格评审修改的代码",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770819406458-f8gb",
+    "timestamp": "2026-02-11T14:16:46.458Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770817182982-5514",
+    "timestamp": "2026-02-11T13:39:42.982Z",
+    "filePath": "review://codex-review-terminal",
+    "content": "请严格评审下上次git提交之后修改的代码。",
+    "preview": "请严格评审下上次git提交之后修改的代码。",
+    "source": "Review (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770815971634-6ut5",
+    "timestamp": "2026-02-11T13:19:31.634Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770815490255-imkm",
+    "timestamp": "2026-02-11T13:11:30.255Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "cd → reviewcmd.sh → codex 每一个命令都要和desktop确认返回后，再执行下一个",
+    "preview": "cd → reviewcmd.sh → codex 每一个命令都要和desktop确认返回后，再执行下一个",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770815408995-d8tm",
+    "timestamp": "2026-02-11T13:10:08.995Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770814529872-7ibt",
+    "timestamp": "2026-02-11T12:55:29.872Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770814321940-dl9b",
+    "timestamp": "2026-02-11T12:52:01.940Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770813588998-ligu",
+    "timestamp": "2026-02-11T12:39:48.998Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "是否项目层级可以设置 hook，当执行完成返回给desktop",
+    "preview": "是否项目层级可以设置 hook，当执行完成返回给desktop",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770813469520-xkzq",
+    "timestamp": "2026-02-11T12:37:49.520Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "请查询一下 codex是否也有 hook之类的能力",
+    "preview": "请查询一下 codex是否也有 hook之类的能力",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  },
+  {
+    "id": "1770813353236-grbr",
+    "timestamp": "2026-02-11T12:35:53.236Z",
+    "filePath": "continue-change://codex-review-terminal",
+    "content": "Review 页面中，增加个init的按钮，点击后，运行init指令，包括： cd 到当前项目目录，运行 ./openspec/reviewcmd.sh，reviewcmd.sh内部是设置环境变量的脚本，目前只有 export http_proxy=http://127.0.0.1:1087;export https_proxy=http://127.0.0.1:1087; \n，然后运行 codex 进入 codex 的cli",
+    "preview": "Review 页面中，增加个init的按钮，点击后，运行init指令，包括： cd 到当前项目目录，运行 ./openspec/reviewcmd.sh，reviewcmd.sh内部是设置环境变量的脚",
+    "source": "Continue Change (codex-review-terminal) > 输入框"
+  }
+]

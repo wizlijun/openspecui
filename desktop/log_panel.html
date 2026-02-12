@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #c8c8d0;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+#toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: #16162a;
+  border-bottom: 1px solid #2a2a4a;
+  user-select: none;
+}
+#toolbar .title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8888aa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+#toolbar .actions {
+  display: flex;
+  gap: 8px;
+}
+#toolbar button {
+  background: none;
+  border: 1px solid #3a3a5a;
+  color: #8888aa;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+#toolbar button:hover {
+  background: #2a2a4a;
+  color: #c8c8d0;
+}
+#log-container {
+  height: calc(100vh - 28px);
+  overflow-y: auto;
+  padding: 6px 10px;
+}
+.log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid #1e1e38;
+}
+.log-entry:hover {
+  background: #1e1e38;
+}
+.log-time {
+  color: #555577;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.log-dir {
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.log-dir.send { background: #1a3a2a; color: #4ade80; }
+.log-dir.recv { background: #1a2a3a; color: #60a5fa; }
+.log-dir.callback { background: #3a2a1a; color: #fbbf24; }
+.log-dir.hook { background: #2a1a3a; color: #c084fc; }
+.log-dir.info { background: #2a2a3a; color: #8888aa; }
+.log-type {
+  color: #aaaacc;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 120px;
+}
+.log-detail {
+  color: #c8c8d0;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.log-detail .truncated {
+  color: #555577;
+  font-style: italic;
+}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <span class="title">📋 Message Log</span>
+  <div class="actions">
+    <button onclick="toggleHookDetails()">Hook Details: OFF</button>
+    <button onclick="toggleAutoScroll()">Auto-scroll: ON</button>
+    <button onclick="clearLog()">Clear</button>
+  </div>
+</div>
+<div id="log-container"></div>
+
+<script>
+var logContainer = document.getElementById('log-container');
+var autoScroll = true;
+var showHookDetails = false;
+var maxEntries = 2000;
+
+function toggleHookDetails() {
+  showHookDetails = !showHookDetails;
+  var btns = document.querySelectorAll('#toolbar button');
+  btns[0].textContent = 'Hook Details: ' + (showHookDetails ? 'ON' : 'OFF');
+}
+
+function toggleAutoScroll() {
+  autoScroll = !autoScroll;
+  var btns = document.querySelectorAll('#toolbar button');
+  btns[1].textContent = 'Auto-scroll: ' + (autoScroll ? 'ON' : 'OFF');
+}
+
+function clearLog() {
+  logContainer.innerHTML = '';
+}
+
+function getTime() {
+  var d = new Date();
+  return d.toLocaleTimeString('en-US', { hour12: false }) + '.' +
+    String(d.getMilliseconds()).padStart(3, '0');
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function truncate(str, max) {
+  if (!str || str.length <= max) return escapeHtml(str);
+  return escapeHtml(str.substring(0, max)) + '<span class="truncated"> ...(' + str.length + ' chars)</span>';
+}
+
+// Strip ANSI escape sequences for display
+function stripAnsi(str) {
+  if (!str) return '';
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+            .replace(/\x1b\].*?\x07/g, '')
+            .replace(/\x1b\[\?[0-9;]*[hl]/g, '')
+            .replace(/\x1b[()][AB012]/g, '')
+            .replace(/[\x00-\x08\x0e-\x1f]/g, '');
+}
+
+function addLog(direction, type, detail) {
+  var entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML =
+    '<span class="log-time">' + getTime() + '</span>' +
+    '<span class="log-dir ' + direction + '">' +
+      (direction === 'send' ? '→ SEND' :
+       direction === 'recv' ? '← RECV' :
+       direction === 'callback' ? '⟲ CALLBACK' :
+       direction === 'hook' ? '⚡ HOOK' :
+       'ℹ INFO') +
+    '</span>' +
+    '<span class="log-type">' + escapeHtml(type) + '</span>' +
+    '<span class="log-detail">' + detail + '</span>';
+
+  logContainer.appendChild(entry);
+
+  // Trim old entries
+  while (logContainer.children.length > maxEntries) {
+    logContainer.removeChild(logContainer.firstChild);
+  }
+
+  if (autoScroll) {
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+}
+
+// ─── API called from Python ────────────────────────────────────────
+
+window.logSend = function(type, detail) {
+  addLog('send', type, truncate(detail, 300));
+};
+
+window.logRecv = function(type, detail) {
+  addLog('recv', type, truncate(stripAnsi(detail), 300));
+};
+
+window.logCallback = function(type, detail) {
+  addLog('callback', type, truncate(detail, 300));
+};
+
+window.logHook = function(type, detail) {
+  // If hook details are hidden, only show the event name
+  var displayDetail = showHookDetails ? truncate(detail, 300) : '<span class="truncated">(details hidden)</span>';
+  addLog('hook', type, displayDetail);
+};
+
+window.logInfo = function(type, detail) {
+  addLog('info', type, truncate(detail, 300));
+};
+
+// Initial log
+addLog('info', 'Log Panel', 'Message log initialized. Monitoring terminal interactions...');
+</script>
+</body>
+</html>
