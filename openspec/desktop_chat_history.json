@@ -1,5 +1,173 @@
 [
   {
+    "id": "1770953867830-z2y5",
+    "timestamp": "2026-02-13T03:37:47.830Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "提交git",
+    "preview": "提交git",
+    "source": "Droid Worker (web-agent-cli-window) > Send"
+  },
+  {
+    "id": "1770953816235-smo3",
+    "timestamp": "2026-02-13T03:36:56.235Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "/opsx:archive",
+    "preview": "/opsx:archive",
+    "source": "Droid Worker (web-agent-cli-window) > Send"
+  },
+  {
+    "id": "1770953771892-pk1x",
+    "timestamp": "2026-02-13T03:36:11.892Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Droid Worker > Apply"
+  },
+  {
+    "id": "1770953735261-8z60",
+    "timestamp": "2026-02-13T03:35:35.261Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "请重新加载openspec的change上下文，changeId为web-agent-cli-window,并使用 openspec change show {changeId} 显示当前proposal。全部使用中文",
+    "preview": "请重新加载openspec的change上下文，changeId为web-agent-cli-window,并使用 openspec change show {changeId} 显示当前propos",
+    "source": "Droid Worker (web-agent-cli-window) > Auto-init prompt"
+  },
+  {
+    "id": "1770953518285-83dm",
+    "timestamp": "2026-02-13T03:31:58.285Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "请重新加载openspec的change上下文，changeId为web-agent-cli-window",
+    "preview": "请重新加载openspec的change上下文，changeId为web-agent-cli-window",
+    "source": "Droid Worker (web-agent-cli-window) > Auto-init prompt"
+  },
+  {
+    "id": "1770953506777-o6fv",
+    "timestamp": "2026-02-13T03:31:46.777Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "请重新加载openspec的change上下文，changeId为web-agent-cli-window",
+    "preview": "请重新加载openspec的change上下文，changeId为web-agent-cli-window",
+    "source": "Droid Worker (web-agent-cli-window) > Auto-init prompt"
+  },
+  {
+    "id": "1770953464839-oo3f",
+    "timestamp": "2026-02-13T03:31:04.839Z",
+    "filePath": "droid-worker://web-agent-cli-window",
+    "content": "请重新加载openspec的change上下文，changeId为web-agent-cli-window",
+    "preview": "请重新加载openspec的change上下文，changeId为web-agent-cli-window",
+    "source": "Droid Worker (web-agent-cli-window) > Auto-init prompt"
+  },
+  {
+    "id": "1770953445296-369n",
+    "timestamp": "2026-02-13T03:30:45.296Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "preview": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "source": "Droid Worker (codex-review-terminal) > Auto-init prompt"
+  },
+  {
+    "id": "1770953075591-pgo0",
+    "timestamp": "2026-02-13T03:24:35.591Z",
+    "filePath": "codex://codex-review-terminal",
+    "content": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "preview": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "source": "Codex Worker (codex-review-terminal) > Review按钮"
+  },
+  {
+    "id": "1770953034653-uyxy",
+    "timestamp": "2026-02-13T03:23:54.653Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "/opsx-apply",
+    "preview": "/opsx-apply",
+    "source": "Droid Worker > Apply"
+  },
+  {
+    "id": "1770952996525-uhwr",
+    "timestamp": "2026-02-13T03:23:16.525Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "preview": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "source": "Droid Worker (codex-review-terminal) > Auto-init prompt"
+  },
+  {
+    "id": "1770952911672-i4uz",
+    "timestamp": "2026-02-13T03:21:51.672Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "preview": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "source": "Droid Worker (codex-review-terminal) > Auto-init prompt"
+  },
+  {
+    "id": "1770952796089-y9rh",
+    "timestamp": "2026-02-13T03:19:56.089Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "preview": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "source": "Droid Worker (codex-review-terminal) > Auto-init prompt"
+  },
+  {
+    "id": "1770952652763-pcv9",
+    "timestamp": "2026-02-13T03:17:32.763Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "preview": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "source": "Droid Worker (codex-review-terminal) > Auto-init prompt"
+  },
+  {
+    "id": "1770910306499-1juv",
+    "timestamp": "2026-02-12T15:31:46.499Z",
+    "filePath": "codex://codex-review-terminal",
+    "content": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "preview": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "source": "Codex Worker (codex-review-terminal) > Review按钮"
+  },
+  {
+    "id": "1770910278389-ym8f",
+    "timestamp": "2026-02-12T15:31:18.389Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "preview": "请重新加载openspec的change上下文，changeId为codex-review-terminal",
+    "source": "Droid Worker (codex-review-terminal) > Auto-init prompt"
+  },
+  {
+    "id": "1770896505213-iugg",
+    "timestamp": "2026-02-12T11:41:45.213Z",
+    "filePath": "droid-worker://idle",
+    "content": "ping",
+    "preview": "ping",
+    "source": "Droid Worker (idle) > Send"
+  },
+  {
+    "id": "1770892323544-w27g",
+    "timestamp": "2026-02-12T10:32:03.544Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "/opsx-continue",
+    "preview": "/opsx-continue",
+    "source": "Droid Worker (codex-review-terminal) > Send"
+  },
+  {
+    "id": "1770892279587-mb7d",
+    "timestamp": "2026-02-12T10:31:19.587Z",
+    "filePath": "droid-worker://codex-review-terminal",
+    "content": "/opsx-continue",
+    "preview": "/opsx-continue",
+    "source": "Droid Worker (codex-review-terminal) > Auto-continue"
+  },
+  {
+    "id": "1770892248401-jubw",
+    "timestamp": "2026-02-12T10:30:48.401Z",
+    "filePath": "droid-worker://idle",
+    "content": "continue",
+    "preview": "continue",
+    "source": "Droid Worker (idle) > Send"
+  },
+  {
+    "id": "1770892226781-fyjj",
+    "timestamp": "2026-02-12T10:30:26.781Z",
+    "filePath": "codex://codex-review-terminal",
+    "content": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "preview": "严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。",
+    "source": "Codex Worker (codex-review-terminal) > Review按钮"
+  },
+  {
     "id": "1770880354022-11jn",
     "timestamp": "2026-02-12T07:12:34.022Z",
     "filePath": "droid-worker://idle",

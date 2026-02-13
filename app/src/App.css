@@ -239,6 +239,18 @@ html, body, #root {
   color: #333;
 }
 
+.wizard-init-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 16px;
+  padding: 32px;
+  color: #666;
+  font-size: 14px;
+}
+
 .wizard-phase-dots {
   display: flex;
   gap: 6px;

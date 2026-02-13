@@ -9,12 +9,16 @@ import { EmbeddedTerminal } from './EmbeddedTerminal'
 import { FolderPlusIcon, PlusCircleIcon, CloseIcon, RefreshIcon } from './Icons'
 import { saveHistoryEntry } from './inputHistoryService'
 import { MarkdownWithCheckbox } from './MarkdownWithCheckbox'
+import { DroidWorkerBase } from './DroidWorkerBase'
+import type { WorkerMode, DroidWorkerConfig } from './DroidWorkerBase'
+import { loadWorkerConfigs, DEFAULT_WORKER_CONFIGS } from './loadWorkerConfig'
 
 // Tab types
 type TabType = 'viewer' | 'change' | 'codex'
 
 interface ChangeTab {
   id: string
+  mode: WorkerMode
   changeId?: string  // If provided, auto-load context
   resumeSessionId?: string  // If provided, resume existing session
 }
@@ -108,297 +112,6 @@ const extractCodexFinalMessage = (data: any): string | null => {
 
 
 
-// ─── Unified Change Panel ────────────────────────────────────────
-
-interface ChangePanelProps {
-  tabId: string  // Unique tab ID for independent PTY session
-  changeId?: string  // If provided, auto-load context with /opsx-continue
-  resumeSessionId?: string  // If provided, resume existing droid session
-  projectPath: string | undefined
-  onStopHookRef: React.MutableRefObject<((data: any) => void) | null>
-  onRefresh: () => void
-  resetKey?: number
-  sessionIdRef: React.MutableRefObject<string | null>
-  onSessionId?: (id: string) => void
-  onBusyChange?: (busy: boolean) => void
-  onNewChange?: () => void
-}
-
-function ChangePanel({ tabId, changeId, resumeSessionId, projectPath, onStopHookRef, onRefresh, resetKey, sessionIdRef, onSessionId, onBusyChange, onNewChange }: ChangePanelProps) {
-  const [message, setMessage] = useState('')
-  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
-  const [waiting, setWaiting] = useState(false)
-  const [initialized, setInitialized] = useState(false)
-  const initializedRef = useRef(false)
-  const initCalledRef = useRef(false)
-  const autoLoadSentRef = useRef(false)
-  const resultRef = useRef<HTMLDivElement>(null)
-
-  const bridge = window.__nativeBridge
-
-  // Reset when resetKey changes (skip initial mount)
-  const prevResetKeyRef = useRef<number | undefined>(resetKey)
-  useEffect(() => {
-    if (resetKey !== undefined && prevResetKeyRef.current !== resetKey) {
-      prevResetKeyRef.current = resetKey
-      setMessage('')
-      setHistory([])
-      setWaiting(false)
-      setInitialized(false)
-      initializedRef.current = false
-      initCalledRef.current = false
-      autoLoadSentRef.current = false
-      sessionIdRef.current = null
-    }
-  }, [resetKey, sessionIdRef])
-
-  useEffect(() => {
-    if (resultRef.current) {
-      resultRef.current.scrollTop = resultRef.current.scrollHeight
-    }
-  }, [history])
-
-  useEffect(() => {
-    onBusyChange?.(waiting)
-  }, [waiting, onBusyChange])
-
-  // Listen for SessionStart / Stop hooks forwarded from App
-  useEffect(() => {
-    onStopHookRef.current = (data: any) => {
-      const eventName = data.event || ''
-      
-      if (eventName === 'SessionStart') {
-        // Ignore if already initialized — prevents re-triggering from broadcast
-        if (initializedRef.current) {
-          console.log(`[ChangePanel:${tabId}] Ignoring SessionStart — already initialized`)
-          return
-        }
-        // Droid session started — capture session_id and mark as initialized
-        if (data.session_id) {
-          sessionIdRef.current = data.session_id
-          console.log(`[ChangePanel:${tabId}] Captured session_id:`, data.session_id)
-          if (onSessionId) onSessionId(data.session_id)
-          // Track session in Python for persistence
-          if (bridge) bridge.trackChangeSession(tabId, data.session_id, changeId)
-        }
-        initializedRef.current = true
-        setInitialized(true)
-        setWaiting(false)
-        setHistory(prev => [...prev, { role: 'assistant', text: '✓ Droid Ready' }])
-        return
-      }
-
-      if (eventName === 'Stop') {
-        // Droid session stopped — display the response
-        const result = data.last_result || '(no response)'
-        setHistory(prev => [...prev, { role: 'assistant', text: result }])
-        setWaiting(false)
-        onRefresh()
-        return
-      }
-
-      // Ignore other events (e.g., SubagentStop)
-      console.log(`[ChangePanel:${tabId}] Ignoring event: ${eventName}`)
-    }
-    return () => { onStopHookRef.current = null }
-  }, [onStopHookRef, onRefresh, onSessionId, tabId, sessionIdRef])
-
-  // Helper: write to this tab's PTY
-  const writeToTerminal = useCallback((text: string) => {
-    if (bridge) bridge.writeChangeInput(tabId, text)
-  }, [bridge, tabId])
-
-  const sendToDroid = useCallback((text: string) => {
-    writeToTerminal(text)
-    setTimeout(() => writeToTerminal('\r'), 200)
-  }, [writeToTerminal])
-
-  // Register per-tab command callback handler
-  useEffect(() => {
-    if (!window.__onChangeCommandCallback) window.__onChangeCommandCallback = {}
-    // Will be set dynamically during init
-    return () => {
-      if (window.__onChangeCommandCallback) delete window.__onChangeCommandCallback[tabId]
-    }
-  }, [tabId])
-
-  // Auto-init on mount: start PTY → cd → droid (or droid --resume)
-  useEffect(() => {
-    if (!bridge || initCalledRef.current) return
-    initCalledRef.current = true
-
-    const isResumeMode = !!resumeSessionId
-    const initMsg = isResumeMode 
-      ? `[Init] Resuming session ${resumeSessionId.slice(0, 8)}...`
-      : '[Init] Starting terminal → cd → droid'
-    
-    setHistory(prev => [...prev, { role: 'user', text: initMsg }])
-    setWaiting(true)
-    setInitialized(false)
-    
-    // In resume mode, we already know the session_id
-    if (isResumeMode) {
-      sessionIdRef.current = resumeSessionId
-      if (onSessionId) onSessionId(resumeSessionId)
-      // Track session in Python for persistence
-      if (bridge) bridge.trackChangeSession(tabId, resumeSessionId, changeId)
-    } else {
-      sessionIdRef.current = null
-    }
-
-    // Register callback handler for this tab
-    if (!window.__onChangeCommandCallback) window.__onChangeCommandCallback = {}
-
-    const startDroid = () => {
-      // After cd, start droid (or resume). SessionStart hook will mark initialized.
-      window.__onChangeCommandCallback![tabId] = () => {
-        // Droid prompt detected — fallback init if SessionStart hook hasn't arrived
-        if (!initializedRef.current) {
-          initializedRef.current = true
-          setInitialized(true)
-          setWaiting(false)
-          setHistory(prev => [...prev, { role: 'assistant', text: '✓ Droid Ready' }])
-        }
-      }
-      const droidCmd = isResumeMode ? `droid --resume ${resumeSessionId}` : 'droid'
-      bridge.runChangeCommandWithCallback(tabId, droidCmd, `${tabId}-droid`, 'droid')
-    }
-
-    // shell-ready → cd → droid
-    window.__onChangeCommandCallback[tabId] = (callbackId: string) => {
-      if (callbackId === `${tabId}-shell-ready`) {
-        setHistory(prev => [...prev, { role: 'assistant', text: '✓ Shell ready.' }])
-        if (projectPath) {
-          window.__onChangeCommandCallback![tabId] = (cbId: string) => {
-            if (cbId === `${tabId}-cd`) {
-              setHistory(prev => [...prev, { role: 'assistant', text: '✓ cd done.' }])
-              startDroid()
-            }
-          }
-          bridge.runChangeCommandWithCallback(tabId, `cd ${projectPath}`, `${tabId}-cd`, 'shell')
-        } else {
-          startDroid()
-        }
-      }
-    }
-
-    // Start a new PTY for this tab (backend auto-registers shell-ready callback)
-    bridge.startChangeTerminal(tabId)
-  }, [bridge, tabId, projectPath, resumeSessionId, sessionIdRef, onSessionId])
-
-  // After init, if changeId provided, auto-load context (only once)
-  useEffect(() => {
-    if (!initialized || !changeId || autoLoadSentRef.current) return
-    
-    autoLoadSentRef.current = true
-    const cmd = `/opsx-continue`
-    setHistory(prev => [...prev, { role: 'user', text: cmd }])
-    setWaiting(true)
-    if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId}`, cmd, `Droid Worker (${changeId}) > Auto-continue`).catch(() => {})
-    sendToDroid(cmd)
-  }, [initialized, changeId, projectPath, sendToDroid])
-
-  // Cleanup: stop PTY on unmount
-  useEffect(() => {
-    return () => {
-      if (bridge) {
-        bridge.stopChangeTerminal(tabId)
-        bridge.untrackChangeSession(tabId)
-      }
-      if (window.__onChangeTerminalOutput) delete window.__onChangeTerminalOutput[tabId]
-      if (window.__onChangeCommandCallback) delete window.__onChangeCommandCallback[tabId]
-      if (window.__onChangeTerminalExit) delete window.__onChangeTerminalExit[tabId]
-      // Reset init flag so StrictMode re-mount can re-init
-      initCalledRef.current = false
-    }
-  }, [bridge, tabId])
-
-  if (!bridge) return <div className="panel-empty">Native bridge not available</div>
-
-  const handleSendMessage = () => {
-    const trimmed = message.trim()
-    if (!trimmed) return
-    setHistory(prev => [...prev, { role: 'user', text: trimmed }])
-    setMessage('')
-    setWaiting(true)
-    const label = `Droid Worker (${changeId || 'idle'}) > Send`
-    if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, trimmed, label).catch(() => {})
-    sendToDroid(trimmed)
-  }
-
-  const handleStop = () => {
-    writeToTerminal('\x03')
-    setWaiting(false)
-    setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.metaKey) {
-      e.preventDefault()
-      if (initialized) handleSendMessage()
-    }
-  }
-
-  const title = changeId ? `Droid Worker: ${changeId}` : 'Droid Worker'
-  const titleSuffix = !initialized ? ' (Initializing...)' : ''
-
-  return (
-    <div className="wizard-panel">
-      <div className="wizard-panel-header">
-        <span className="wizard-panel-title">{title}{titleSuffix}</span>
-      </div>
-
-      {history.length > 0 && (
-        <div className="wizard-history" ref={resultRef}>
-          {history.map((h, i) => (
-            <div key={i} className={`wizard-msg wizard-msg-${h.role}`}>
-              <span className="wizard-msg-role">{h.role === 'user' ? '▶' : '◀'}</span>
-              {h.role === 'assistant' && /- \[[ x]\]/i.test(h.text)
-                ? <MarkdownWithCheckbox text={h.text} className="wizard-msg-text" />
-                : <pre className="wizard-msg-text">{h.text}</pre>
-              }
-            </div>
-          ))}
-          {waiting && (
-            <div className="wizard-msg wizard-msg-loading">
-              <span className="wizard-spinner" />
-              <span>Droid is working...</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="wizard-input-area">
-        <label className="dialog-label">Send a message to Droid:</label>
-        <textarea
-          className="dialog-textarea"
-          value={message}
-          onChange={e => setMessage(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={initialized ? "Type a message or use buttons below..." : "Initializing..."}
-          rows={3}
-          disabled={!initialized}
-        />
-      </div>
-
-      <div className="wizard-actions">
-        <div className="wizard-actions-left">
-          {waiting && (
-            <button className="btn-stop" onClick={handleStop}>⏹ Stop</button>
-          )}
-        </div>
-        <div className="wizard-actions-right">
-          <button className="btn-primary" onClick={handleSendMessage} disabled={!initialized || !message.trim() || waiting}>
-            Send →
-          </button>
-          <button className="btn-secondary" onClick={onNewChange} disabled={!initialized || !message.trim() || waiting || !onNewChange}>
-            New Change
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // ─── Codex Worker Panel ────────────────────────────────────────────
 
@@ -420,8 +133,15 @@ function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookR
   const [waiting, setWaiting] = useState(false)
   const [stopped, setStopped] = useState(false)
   const [initialized, setInitialized] = useState(false)
+  const [showInitButton, setShowInitButton] = useState(true)
   const initCalledRef = useRef(false)
   const resultRef = useRef<HTMLDivElement>(null)
+
+  // Stable refs for callback props to avoid re-triggering effects
+  const onRefreshRef = useRef(onRefresh)
+  onRefreshRef.current = onRefresh
+  const onSessionIdRef = useRef(onSessionId)
+  onSessionIdRef.current = onSessionId
 
   useEffect(() => {
     if (resultRef.current) {
@@ -441,7 +161,7 @@ function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookR
         const sid = data.session_id || data.payload?.['thread-id'] || data.payload?.thread_id || null
         if (sid && !sessionIdRef.current) {
           sessionIdRef.current = sid
-          onSessionId?.(sid)
+          onSessionIdRef.current?.(sid)
           // Track session in Python for persistence
           if (bridge) bridge.trackCodexSession(tabId, sid, changeId)
         }
@@ -450,18 +170,18 @@ function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookR
           const finalMessage = extractCodexFinalMessage(data) || '✅ Codex task completed.'
           setHistory(prev => [...prev, { role: 'assistant', text: finalMessage }])
           setWaiting(false)
-          onRefresh()
+          if (onRefreshRef.current) onRefreshRef.current()
         }
       } else if (eventName === 'Stop') {
         // Droid Stop hook
         const result = data.last_result || '(no response)'
         setHistory(prev => [...prev, { role: 'assistant', text: result }])
         setWaiting(false)
-        onRefresh()
+        if (onRefreshRef.current) onRefreshRef.current()
       }
     }
     return () => { onStopHookRef.current = null }
-  }, [onStopHookRef, onRefresh, onSessionId, sessionIdRef])
+  }, [onStopHookRef, tabId, changeId])
 
   const bridge = window.__nativeBridge
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
@@ -477,7 +197,7 @@ function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookR
     if (resumeSessionId) {
       const notifyScriptPath = projectPath ? `${projectPath}/openspec/codex-notify.sh` : './openspec/codex-notify.sh'
       const notifyConfig = `notify=["bash",${JSON.stringify(notifyScriptPath)}]`
-      return `codex --resume ${resumeSessionId} -c ${shellSingleQuote(notifyConfig)}`
+      return `codex resume ${resumeSessionId} -c ${shellSingleQuote(notifyConfig)}`
     }
     const notifyScriptPath = projectPath ? `${projectPath}/openspec/codex-notify.sh` : './openspec/codex-notify.sh'
     const notifyConfig = `notify=["bash",${JSON.stringify(notifyScriptPath)}]`
@@ -485,6 +205,11 @@ function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookR
   }
 
   const handleInit = () => {
+    if (initCalledRef.current) return
+    initCalledRef.current = true
+    
+    setShowInitButton(false)
+    
     const isResumeMode = !!resumeSessionId
     setInitialized(true)
     setWaiting(true)
@@ -579,23 +304,41 @@ function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookR
     }
   }
 
-  // Auto-init on mount
+  // Auto-init after all components are mounted
   useEffect(() => {
-    if (!initCalledRef.current) {
-      initCalledRef.current = true
-      handleInit()
-    }
-    // Cleanup: untrack session on unmount
+    if (!bridge) return
+    const raf = requestAnimationFrame(() => {
+      setTimeout(() => {
+        if (!initCalledRef.current) {
+          handleInit()
+        }
+      }, 300)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [bridge])
+
+  // Cleanup: untrack session on unmount
+  useEffect(() => {
     return () => {
       if (bridge) bridge.untrackCodexSession(tabId)
     }
-  }, [])
+  }, [bridge, tabId])
 
   return (
     <div className="wizard-panel">
       <div className="wizard-panel-header">
         <span className="wizard-panel-title">Codex Worker{changeId ? `: ${changeId}` : ''}{stopped ? ' (Stopped)' : ''}</span>
       </div>
+
+      {/* Init screen */}
+      {showInitButton && !initialized && (
+        <div className="wizard-init-screen">
+          <p>Click the button below to initialize Codex Worker.</p>
+          <button className="btn-primary" onClick={handleInit} disabled={waiting}>
+            {waiting ? 'Initializing...' : 'Initialize Codex'}
+          </button>
+        </div>
+      )}
 
       {history.length > 0 && (
         <div className="wizard-history" ref={resultRef}>
@@ -665,12 +408,24 @@ function App() {
   const [changeBusyMap, setChangeBusyMap] = useState<Map<string, boolean>>(new Map())
   const [codexBusyMap, setCodexBusyMap] = useState<Map<string, boolean>>(new Map())
   const [changeResetKeys, setChangeResetKeys] = useState<Map<string, number>>(new Map())
+  const [workerConfigs, setWorkerConfigs] = useState<Record<WorkerMode, DroidWorkerConfig>>(DEFAULT_WORKER_CONFIGS)
   const changeStopHookRefs = useRef<Map<string, ((data: any) => void) | null>>(new Map())
   const codexStopHookRefs = useRef<Map<string, ((data: any) => void) | null>>(new Map())
   const changeSessionIdRefs = useRef<Map<string, string | null>>(new Map())
   const codexSessionIdRefs = useRef<Map<string, string | null>>(new Map())
 
   const supported = isFileSystemAccessSupported()
+
+  // Load worker configs when project path changes
+  useEffect(() => {
+    if (!tree?.nativePath) {
+      setWorkerConfigs(DEFAULT_WORKER_CONFIGS)
+      return
+    }
+    loadWorkerConfigs(tree.nativePath).then(configs => {
+      setWorkerConfigs(configs)
+    })
+  }, [tree?.nativePath])
 
   // Auto-load last directory on startup (native app only)
   if (window.__isNativeApp && !autoLoaded && window.__lastDirectory) {
@@ -705,6 +460,7 @@ function App() {
         const tabId = `change-resume-${session.sessionId.slice(0, 8)}-${Date.now()}`
         newChangeTabs.push({
           id: tabId,
+          mode: session.changeId ? 'continue_change' : 'new_change',
           changeId: session.changeId || undefined,
           resumeSessionId: session.sessionId,
         })
@@ -843,7 +599,7 @@ function App() {
       switch (eventName) {
         case 'SessionStart':
           // Droid session started — broadcast to all change tabs for init detection.
-          // Each ChangePanel checks if it's waiting for init and captures session_id.
+          // Each DroidWorkerBase checks if it's waiting for init and captures session_id.
           safeDispatch(changeStopHookRefs.current, data, 'SessionStart→change')
           break
 
@@ -897,14 +653,14 @@ function App() {
 
   const handleContinueChange = (changeId: string) => {
     const tabId = `change-${changeId}-${Date.now()}`
-    setChangeTabs(prev => [...prev, { id: tabId, changeId }])
+    setChangeTabs(prev => [...prev, { id: tabId, mode: 'continue_change', changeId }])
     setActiveChangeTabId(tabId)
     setActiveTab('change')
   }
 
   const handleNewChange = () => {
     const tabId = `change-new-${Date.now()}`
-    setChangeTabs(prev => [...prev, { id: tabId }])
+    setChangeTabs(prev => [...prev, { id: tabId, mode: 'new_change' }])
     setChangeResetKeys(prev => new Map(prev).set(tabId, 0))
     setActiveChangeTabId(tabId)
     setActiveTab('change')
@@ -999,7 +755,7 @@ function App() {
     
     // Create Droid Worker tab (no changeId = idle)
     const changeTabId = `change-new-${Date.now()}`
-    setChangeTabs(prev => [...prev, { id: changeTabId }])
+    setChangeTabs(prev => [...prev, { id: changeTabId, mode: 'new_change' }])
     setChangeResetKeys(prev => new Map(prev).set(changeTabId, 0))
     setActiveChangeTabId(changeTabId)
     
@@ -1018,7 +774,7 @@ function App() {
   const handleNewDroid = () => {
     // Same as handleNewChange — create a new Droid Worker tab
     const tabId = `change-new-${Date.now()}`
-    setChangeTabs(prev => [...prev, { id: tabId }])
+    setChangeTabs(prev => [...prev, { id: tabId, mode: 'new_change' }])
     setChangeResetKeys(prev => new Map(prev).set(tabId, 0))
     setActiveChangeTabId(tabId)
     setActiveTab('change')
@@ -1131,11 +887,12 @@ function App() {
         {window.__isNativeApp && changeTabs.map(tab => (
           <div key={tab.id} className="split-layout" style={{ display: activeTab === 'change' && activeChangeTabId === tab.id ? 'flex' : 'none' }}>
             <div className="split-left">
-              <ChangePanel
+              <DroidWorkerBase
                 tabId={tab.id}
                 changeId={tab.changeId}
                 resumeSessionId={tab.resumeSessionId}
                 projectPath={tree?.nativePath}
+                config={workerConfigs[tab.mode]}
                 onStopHookRef={{
                   get current() { return changeStopHookRefs.current.get(tab.id) || null },
                   set current(value) { changeStopHookRefs.current.set(tab.id, value) }
@@ -1148,7 +905,7 @@ function App() {
                 }}
                 onSessionId={(id) => setChangeSessionDisplays(prev => new Map(prev).set(tab.id, id))}
                 onBusyChange={(busy) => setChangeBusyMap(prev => new Map(prev).set(tab.id, busy))}
-                onNewChange={handleNewChange}
+                onReviewAction={(changeId) => handleCodexChange(changeId)}
               />
             </div>
             <div className="split-right">
