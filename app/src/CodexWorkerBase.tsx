@@ -502,7 +502,7 @@ export function CodexWorkerBase({
           if (abortedRef.current) return
           if (callbackId === `${tabId}-cd`) step2_sourceReviewCmd()
         }
-        bridge.runChangeCommandWithCallback(tabId, `cd ${projectPath}`, `${tabId}-cd`, 'shell')
+        bridge.runChangeCommandWithCallback(tabId, `cd ${shellSingleQuote(projectPath)}`, `${tabId}-cd`, 'shell')
       } else {
         step2_sourceReviewCmd()
       }

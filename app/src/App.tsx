@@ -453,6 +453,10 @@ function App() {
     codexSessionIdRefs.current.delete(tabId)
     // Remove from initializing queue if still pending
     codexInitializingTabsRef.current = codexInitializingTabsRef.current.filter(t => t !== tabId)
+    // Clean up pending tokens for this tab
+    codexPendingTokensRef.current.forEach((tid, tk) => {
+      if (tid === tabId) codexPendingTokensRef.current.delete(tk)
+    })
     setCodexSessionDisplays(prev => { const m = new Map(prev); m.delete(tabId); return m })
     // Clean up worker binding
     const boundDroidId = codexToDroidRef.current.get(tabId)
