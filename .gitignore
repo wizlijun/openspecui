@@ -1,5 +1,5 @@
 # OS
 .DS_Store
 
-# OpenSpec runtime data — never commit
-.openspec/desktop_chat_history.json
+# Ignore all dot-prefixed directories
+.*/
