@@ -60,6 +60,7 @@ declare global {
     __onChangeTerminalOutputBytes?: Record<string, (base64Data: string) => void>
     __onChangeCommandCallback?: Record<string, (callbackId: string, output: string) => void>
     __onChangeTerminalExit?: Record<string, (code: number) => void>
+    __closingTabs?: Set<string>
     webkit?: {
       messageHandlers?: {
         terminalInput?: { postMessage: (data: string) => void }

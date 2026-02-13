@@ -19,7 +19,17 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     leftButtons: [
       { label: 'Continue', prompt: '/opsx-continue' },
       { label: 'Apply', prompt: '/opsx-apply' },
-      { label: 'Review', action: 'open_codex_review' },
+      { label: 'Code Review', action: 'open_codex_code_review' },
+    ],
+    rightButtons: [],
+  },
+  fix_review: {
+    mode: 'fix_review',
+    name: 'Fix Review',
+    autoInitPrompt: null,
+    leftButtons: [
+      { label: 'Fix', promptTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
+      { label: 'Review', action: 'open_codex_code_review' },
     ],
     rightButtons: [],
   },
@@ -33,6 +43,11 @@ interface YamlButtonConfig {
   requires_input?: boolean
 }
 
+interface YamlConfirmationConfig {
+  enabled?: boolean
+  response_template?: string
+}
+
 interface YamlModeConfig {
   name: string
   description?: string
@@ -41,6 +56,7 @@ interface YamlModeConfig {
     left?: YamlButtonConfig[]
     right?: YamlButtonConfig[]
   }
+  confirmation?: YamlConfirmationConfig
 }
 
 interface YamlConfig {
@@ -64,6 +80,10 @@ function parseModeConfig(mode: WorkerMode, yamlMode: YamlModeConfig): DroidWorke
     autoInitPrompt: yamlMode.auto_init_prompt === undefined ? null : yamlMode.auto_init_prompt,
     leftButtons: (yamlMode.buttons?.left || []).map(parseButton),
     rightButtons: (yamlMode.buttons?.right || []).map(parseButton),
+    confirmation: yamlMode.confirmation ? {
+      enabled: yamlMode.confirmation.enabled !== false,
+      responseTemplate: yamlMode.confirmation.response_template,
+    } : { enabled: true },
   }
 }
 
@@ -78,23 +98,30 @@ export async function loadWorkerConfigs(projectPath: string): Promise<Record<Wor
     return DEFAULT_WORKER_CONFIGS
   }
 
-  const configPath = `${projectPath}/openspec/droid_worker_define.yml`
+  const primaryConfigPath = `${projectPath}/.openspec/droid_worker_define.yml`
+  const legacyConfigPath = `${projectPath}/openspec/droid_worker_define.yml`
 
   try {
-    const result = await bridge.readFile(configPath)
+    let configPath = primaryConfigPath
+    let result = await bridge.readFile(primaryConfigPath)
     if (!result.success || !result.content) {
-      console.warn(`[loadWorkerConfigs] Failed to read ${configPath}, using defaults`)
-      return DEFAULT_WORKER_CONFIGS
+      const legacyResult = await bridge.readFile(legacyConfigPath)
+      if (!legacyResult.success || !legacyResult.content) {
+        console.warn(`[loadWorkerConfigs] Failed to read ${primaryConfigPath} or ${legacyConfigPath}, using defaults`)
+        return DEFAULT_WORKER_CONFIGS
+      }
+      result = legacyResult
+      configPath = legacyConfigPath
     }
 
-    const parsed = yaml.load(result.content) as YamlConfig
+    const parsed = yaml.load(result.content!) as YamlConfig
     if (!parsed?.modes) {
       console.warn('[loadWorkerConfigs] Invalid config structure, using defaults')
       return DEFAULT_WORKER_CONFIGS
     }
 
     const configs: Record<WorkerMode, DroidWorkerConfig> = { ...DEFAULT_WORKER_CONFIGS }
-    const modeKeys: WorkerMode[] = ['new_change', 'continue_change']
+    const modeKeys: WorkerMode[] = ['new_change', 'continue_change', 'fix_review']
 
     for (const key of modeKeys) {
       if (parsed.modes[key]) {

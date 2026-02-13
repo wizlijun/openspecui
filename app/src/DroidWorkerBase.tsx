@@ -1,10 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { saveHistoryEntry } from './inputHistoryService'
 import { MarkdownWithCheckbox } from './MarkdownWithCheckbox'
+import { HumanConfirmationCard } from './HumanConfirmationCard'
+import type { ConfirmationCardConfig, ConfirmationButton, ButtonAction } from './loadConfirmationCardConfig'
+import { detectScenario } from './loadConfirmationCardConfig'
 
 // ─── Types ─────────────────────────────────────────────────────────
 
-export type WorkerMode = 'new_change' | 'continue_change'
+export type WorkerMode = 'new_change' | 'continue_change' | 'fix_review'
 
 export interface QuickButton {
   label: string
@@ -18,6 +21,11 @@ export interface QuickButton {
   requiresInput?: boolean
 }
 
+export interface ConfirmationConfig {
+  enabled?: boolean
+  responseTemplate?: string
+}
+
 export interface DroidWorkerConfig {
   mode: WorkerMode
   name: string
@@ -27,29 +35,8 @@ export interface DroidWorkerConfig {
   leftButtons: QuickButton[]
   /** Buttons on the right side (before Send button) */
   rightButtons: QuickButton[]
-}
-
-export const WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
-  new_change: {
-    mode: 'new_change',
-    name: 'New Change',
-    autoInitPrompt: null,
-    leftButtons: [],
-    rightButtons: [
-      { label: 'New Change', promptTemplate: '/opsx-new {input}', requiresInput: true },
-    ],
-  },
-  continue_change: {
-    mode: 'continue_change',
-    name: 'Continue Change',
-    autoInitPrompt: '请重新加载openspec的change上下文，changeId为{changeId}',
-    leftButtons: [
-      { label: 'Continue', prompt: '/opsx-continue' },
-      { label: 'Apply', prompt: '/opsx-apply' },
-      { label: 'Review', action: 'open_codex_review' },
-    ],
-    rightButtons: [],
-  },
+  /** Human confirmation card config */
+  confirmation?: ConfirmationConfig
 }
 
 // ─── Props ─────────────────────────────────────────────────────────
@@ -68,6 +55,12 @@ export interface DroidWorkerBaseProps {
   onBusyChange?: (busy: boolean) => void
   /** Called when "Review" action button is clicked */
   onReviewAction?: (changeId: string) => void
+  /** Ref for external message injection (used by App for Droid Fix from Codex Worker) */
+  onSendMessageRef?: React.MutableRefObject<((message: string) => void) | null>
+  /** Auto-send this message after Droid Worker is initialized (for fix_review mode) */
+  autoSendMessage?: string
+  /** Confirmation card config loaded from .openspec/confirmation_card.yml */
+  confirmationCardConfig?: ConfirmationCardConfig
 }
 
 // ─── Component ─────────────────────────────────────────────────────
@@ -75,22 +68,36 @@ export interface DroidWorkerBaseProps {
 export function DroidWorkerBase({
   tabId, changeId, resumeSessionId, projectPath, config,
   onStopHookRef, onRefresh, resetKey, sessionIdRef, onSessionId, onBusyChange,
-  onReviewAction,
+  onReviewAction, onSendMessageRef, autoSendMessage, confirmationCardConfig,
 }: DroidWorkerBaseProps) {
   const [message, setMessage] = useState('')
   const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
   const [waiting, setWaiting] = useState(false)
   const [initialized, setInitialized] = useState(false)
   const [showInitButton, setShowInitButton] = useState(true)
+  const [confirmationData, setConfirmationData] = useState<{ text: string; scenarioKey: string } | null>(null)
   const initializedRef = useRef(false)
   const initCalledRef = useRef(false)
   const autoPromptSentRef = useRef(false)
+  const autoSendMessageSentRef = useRef(false)
   const resultRef = useRef<HTMLDivElement>(null)
 
   const onRefreshRef = useRef(onRefresh)
   onRefreshRef.current = onRefresh
   const onSessionIdRef = useRef(onSessionId)
   onSessionIdRef.current = onSessionId
+  const confirmationCardConfigRef = useRef(confirmationCardConfig)
+  confirmationCardConfigRef.current = confirmationCardConfig
+  const onBusyChangeRef = useRef(onBusyChange)
+  onBusyChangeRef.current = onBusyChange
+  const onStopHookRefStable = useRef(onStopHookRef)
+  onStopHookRefStable.current = onStopHookRef
+  const onSendMessageRefStable = useRef(onSendMessageRef)
+  onSendMessageRefStable.current = onSendMessageRef
+  const sessionIdRefStable = useRef(sessionIdRef)
+  sessionIdRefStable.current = sessionIdRef
+  const onReviewActionRef = useRef(onReviewAction)
+  onReviewActionRef.current = onReviewAction
 
   const bridge = window.__nativeBridge
 
@@ -107,9 +114,11 @@ export function DroidWorkerBase({
       initializedRef.current = false
       initCalledRef.current = false
       autoPromptSentRef.current = false
-      sessionIdRef.current = null
+      autoSendMessageSentRef.current = false
+      sessionIdRefStable.current.current = null
     }
-  }, [resetKey, sessionIdRef])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey])
 
   // Auto-scroll
   useEffect(() => {
@@ -120,18 +129,17 @@ export function DroidWorkerBase({
 
   // Busy state
   useEffect(() => {
-    onBusyChange?.(waiting)
-  }, [waiting, onBusyChange])
+    onBusyChangeRef.current?.(waiting)
+  }, [waiting])
 
-  // Hook listener
   useEffect(() => {
-    onStopHookRef.current = (data: any) => {
+    onStopHookRefStable.current.current = (data: any) => {
       const eventName = data.event || ''
 
       if (eventName === 'SessionStart') {
         if (initializedRef.current) return
         if (data.session_id) {
-          sessionIdRef.current = data.session_id
+          sessionIdRefStable.current.current = data.session_id
           if (onSessionIdRef.current) onSessionIdRef.current(data.session_id)
           if (bridge) bridge.trackChangeSession(tabId, data.session_id, changeId)
         }
@@ -143,15 +151,30 @@ export function DroidWorkerBase({
       }
 
       if (eventName === 'Stop') {
+        // Ignore Stop events from other sessions (broadcast fallback)
+        const hookSid = data.session_id || null
+        const mySid = sessionIdRefStable.current.current
+        if (hookSid && mySid && hookSid !== mySid) return
+
         const result = data.last_result || '(no response)'
         setHistory(prev => [...prev, { role: 'assistant', text: result }])
         setWaiting(false)
+        
+        // Detect scenario from config triggers (use ref to avoid stale closure)
+        if (config.confirmation?.enabled !== false && confirmationCardConfigRef.current) {
+          const scenarioKey = detectScenario(result, confirmationCardConfigRef.current)
+          if (scenarioKey !== 'default') {
+            setConfirmationData({ text: result, scenarioKey })
+          }
+        }
+        
         if (onRefreshRef.current) onRefreshRef.current()
         return
       }
     }
-    return () => { onStopHookRef.current = null }
-  }, [onStopHookRef, tabId, bridge, changeId])
+    return () => { onStopHookRefStable.current.current = null }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabId, bridge, changeId, config.confirmation])
 
   // Terminal helpers
   const writeToTerminal = useCallback((text: string) => {
@@ -163,13 +186,37 @@ export function DroidWorkerBase({
     setTimeout(() => writeToTerminal('\r'), 200)
   }, [writeToTerminal])
 
-  // Register per-tab command callback
+  // Register sendMessage function for external injection (Droid Fix from Codex Worker)
+  // Guard: only send when Droid is initialized and has a session, otherwise the
+  // command would fall through to the raw shell instead of the Droid REPL.
   useEffect(() => {
-    if (!window.__onChangeCommandCallback) window.__onChangeCommandCallback = {}
-    return () => {
-      if (window.__onChangeCommandCallback) delete window.__onChangeCommandCallback[tabId]
+    const ref = onSendMessageRefStable.current
+    if (ref) {
+      ref.current = (msg: string) => {
+        if (!initializedRef.current || !sessionIdRef.current) {
+          console.warn(`[DroidWorkerBase:${tabId}] sendMessage rejected — Droid not ready (initialized=${initializedRef.current}, session=${sessionIdRef.current})`)
+          alert('Droid Worker 尚未就绪，请稍后重试')
+          return
+        }
+        setHistory(prev => [...prev, { role: 'user', text: msg }])
+        setWaiting(true)
+        if (projectPath) {
+          saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, msg, `Droid Worker > External Fix`).catch(() => {})
+        }
+        sendToDroid(msg)
+      }
     }
-  }, [tabId])
+    return () => {
+      const r = onSendMessageRefStable.current
+      if (r) {
+        r.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changeId, projectPath, sendToDroid, tabId])
+
+  // Ensure global callback registry exists
+  if (!window.__onChangeCommandCallback) window.__onChangeCommandCallback = {}
 
   // Abort ref
   const abortedRef = useRef(false)
@@ -191,11 +238,11 @@ export function DroidWorkerBase({
     setInitialized(false)
 
     if (isResumeMode) {
-      sessionIdRef.current = resumeSessionId
+      sessionIdRefStable.current.current = resumeSessionId
       if (onSessionIdRef.current) onSessionIdRef.current(resumeSessionId)
       if (bridge) bridge.trackChangeSession(tabId, resumeSessionId, changeId)
     } else {
-      sessionIdRef.current = null
+      sessionIdRefStable.current.current = null
     }
 
     if (!window.__onChangeCommandCallback) window.__onChangeCommandCallback = {}
@@ -231,34 +278,53 @@ export function DroidWorkerBase({
     }
 
     bridge.startChangeTerminal(tabId)
-  }, [bridge, tabId, projectPath, resumeSessionId, sessionIdRef, changeId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridge, tabId, projectPath, resumeSessionId, changeId])
 
-  // Cleanup
+  // Cleanup — deps are intentionally empty: tabId is stable for the lifetime of the component,
+  // and bridge is a global singleton. This ensures cleanup runs only on unmount.
   useEffect(() => {
+    console.log(`[DroidWorker:${tabId}] ✅ MOUNTED`)
+    abortedRef.current = false  // Reset on mount (important for HMR)
     return () => {
+      // Only kill terminal if the tab is being explicitly closed by the user.
+      // During Vite HMR, components unmount/remount but the tab is not closing —
+      // killing the terminal would disrupt running processes.
+      const isClosing = window.__closingTabs?.has(tabId)
+      console.warn(`[DroidWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}`, new Error('unmount stack'))
       abortedRef.current = true
-      if (bridge) {
-        bridge.stopChangeTerminal(tabId)
-        bridge.untrackChangeSession(tabId)
+      if (isClosing) {
+        const b = window.__nativeBridge
+        if (b) {
+          b.stopChangeTerminal(tabId)
+          b.untrackChangeSession(tabId)
+        }
+        window.__closingTabs?.delete(tabId)
       }
-      if (window.__onChangeTerminalOutput) delete window.__onChangeTerminalOutput[tabId]
-      if (window.__onChangeCommandCallback) delete window.__onChangeCommandCallback[tabId]
-      if (window.__onChangeTerminalExit) delete window.__onChangeTerminalExit[tabId]
+      // Only clean up callbacks if tab is actually closing (not HMR)
+      if (isClosing) {
+        if (window.__onChangeTerminalOutput) delete window.__onChangeTerminalOutput[tabId]
+        if (window.__onChangeCommandCallback) delete window.__onChangeCommandCallback[tabId]
+        if (window.__onChangeTerminalExit) delete window.__onChangeTerminalExit[tabId]
+        if (window.__onChangeTerminalOutputBytes) delete window.__onChangeTerminalOutputBytes[tabId]
+      }
     }
-  }, [bridge, tabId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Auto-init after all components are mounted
   useEffect(() => {
     if (!bridge) return
     const raf = requestAnimationFrame(() => {
       setTimeout(() => {
-        if (!initCalledRef.current) {
+        if (!initCalledRef.current && !abortedRef.current) {
           handleInit()
         }
       }, 300)
     })
     return () => cancelAnimationFrame(raf)
-  }, [bridge, handleInit])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridge])  // Only depend on bridge, not handleInit
 
   // Auto-send init prompt after initialized AND ready (config-driven)
   useEffect(() => {
@@ -274,6 +340,22 @@ export function DroidWorkerBase({
     }
     sendToDroid(prompt)
   }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToDroid])
+
+  // Auto-send external message after initialized and not busy (for fix_review mode)
+  useEffect(() => {
+    if (!initialized || waiting || autoSendMessageSentRef.current) return
+    if (!autoSendMessage) return
+    // Wait for autoInitPrompt to be sent first (if any)
+    if (config.autoInitPrompt && !autoPromptSentRef.current) return
+
+    autoSendMessageSentRef.current = true
+    setHistory(prev => [...prev, { role: 'user', text: autoSendMessage }])
+    setWaiting(true)
+    if (projectPath) {
+      saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, autoSendMessage, `Droid Worker > Auto Fix Message`).catch(() => {})
+    }
+    sendToDroid(autoSendMessage)
+  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, changeId, projectPath, sendToDroid])
 
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
 
@@ -298,8 +380,10 @@ export function DroidWorkerBase({
   const handleQuickButton = (btn: QuickButton) => {
     // Special action
     if (btn.action) {
-      if (btn.action === 'open_codex_review' && onReviewAction && changeId) {
-        onReviewAction(changeId)
+      // Support both new and legacy action names
+      const normalizedAction = btn.action.toLowerCase().replace(/[_\s-]+/g, '_')
+      if ((normalizedAction === 'open_codex_code_review' || normalizedAction === 'open_code_review' || normalizedAction === 'code_review') && onReviewActionRef.current && changeId) {
+        onReviewActionRef.current(changeId)
       }
       return
     }
@@ -332,6 +416,28 @@ export function DroidWorkerBase({
       if (initialized) handleSendMessage()
     }
   }
+
+  // ─── Confirmation handlers ───────────────────────────────────────
+
+  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
+    if (action === 'cancel') {
+      setConfirmationData(null)
+      return
+    }
+
+    // In Droid Worker, all fix actions send to current Droid
+    const template = button.messageTemplate || config.confirmation?.responseTemplate || '根据评审建议修复以下问题：\n{selected_items}'
+    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
+    const fixMessage = template.replace('{selected_items}', itemsText)
+
+    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
+    setConfirmationData(null)
+    setWaiting(true)
+    if (projectPath) {
+      saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, fixMessage, `Droid Worker > ${button.label}`).catch(() => {})
+    }
+    sendToDroid(fixMessage)
+  }, [config.confirmation?.responseTemplate, changeId, projectPath, sendToDroid])
 
   // ─── Render ──────────────────────────────────────────────────────
 
@@ -419,6 +525,15 @@ export function DroidWorkerBase({
           </button>
         </div>
       </div>
+
+      {/* Human Confirmation Card */}
+      {confirmationData && (
+        <HumanConfirmationCard
+          text={confirmationData.text}
+          scenario={confirmationCardConfig?.scenarios[confirmationData.scenarioKey]}
+          onAction={handleConfirmationAction}
+        />
+      )}
     </div>
   )
 }

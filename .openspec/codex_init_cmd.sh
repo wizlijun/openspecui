@@ -24,15 +24,15 @@ if [[ ! -d "$CODEX_DIR" ]]; then
   fi
 fi
 
-# Copy notify script from openspec/
-if [[ -f "openspec/codex-notify.sh" ]]; then
-  if cp openspec/codex-notify.sh "$NOTIFY_SCRIPT" && chmod +x "$NOTIFY_SCRIPT"; then
+# Copy notify script from .openspec/
+if [[ -f ".openspec/codex-notify.sh" ]]; then
+  if cp .openspec/codex-notify.sh "$NOTIFY_SCRIPT" && chmod +x "$NOTIFY_SCRIPT"; then
     echo "✓ Installed notify hook: $NOTIFY_SCRIPT"
   else
     echo "⚠ Warning: failed to install notify hook at $NOTIFY_SCRIPT"
   fi
 else
-  echo "⚠ Warning: openspec/codex-notify.sh not found, skipping notify hook setup"
+  echo "⚠ Warning: .openspec/codex-notify.sh not found, skipping notify hook setup"
 fi
 
 # Create or update .codex/config.toml with notify hook
@@ -71,3 +71,18 @@ EOF
 fi
 
 echo "✓ Review environment ready"
+
+# ─── Codex Start Functions ──────────────────────────────────────────
+# Start codex with ping prompt to trigger first notify (signals ready)
+start_codex() {
+  codex "ping"
+}
+
+# Resume an existing codex session with ping
+resume_codex() {
+  local session_id="$1"
+  codex resume "$session_id" "ping"
+}
+
+export -f start_codex
+export -f resume_codex

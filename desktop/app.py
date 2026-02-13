@@ -246,12 +246,39 @@ class TerminalSession:
         if self.master_fd is not None and self._alive:
             self._set_size(cols, rows)
 
+    def _kill_descendants(self, pid):
+        """Recursively kill all descendant processes of the given PID."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['pgrep', '-P', str(pid)],
+                capture_output=True, text=True, timeout=2
+            )
+            for child_pid_str in result.stdout.strip().split('\n'):
+                if child_pid_str.strip():
+                    child_pid = int(child_pid_str.strip())
+                    self._kill_descendants(child_pid)  # depth-first: kill grandchildren first
+                    try:
+                        os.kill(child_pid, signal.SIGTERM)
+                        print(f"[TerminalSession] Killed descendant PID={child_pid} of PID={pid}")
+                    except (ProcessLookupError, OSError):
+                        pass
+        except Exception:
+            pass
+
     def kill(self):
+        print(f"[TerminalSession] kill() called for PID={self.pid}, alive={self._alive}")
         self._alive = False
         if self.pid:
+            # Kill all descendant processes first (depth-first),
+            # because child processes like node/codex may create their own process groups
+            # and won't be killed by killpg on the shell's group.
+            self._kill_descendants(self.pid)
+            # Then kill the shell itself
             try:
                 os.kill(self.pid, signal.SIGTERM)
-            except ProcessLookupError:
+                print(f"[TerminalSession] Sent SIGTERM to shell PID={self.pid}")
+            except (ProcessLookupError, OSError):
                 pass
 
     def _set_size(self, cols, rows):
@@ -374,13 +401,21 @@ class NativeBridgeHandler(NSObject):
             elif msg_type == 'startReviewTerminal':
                 project_path = msg.get('projectPath', '')
                 self.coordinator.log('send', 'startReviewTerminal', project_path)
-                self.coordinator.start_review_terminal(80, 24)
-                # Register a callback to detect when the shell prompt is ready
-                self.coordinator._review_pending_callbacks['review-shell-ready'] = {
-                    'pattern': 'shell',
-                    'buffer': '',
-                    'command': '(shell startup)',
-                }
+                if self.coordinator._review_terminal_ready:
+                    # Review terminal already running — immediately fire the shell-ready callback
+                    self.coordinator.log('info', 'startReviewTerminal', 'Already running, firing shell-ready immediately')
+                    js = "if (window.__onReviewCommandCallback) window.__onReviewCommandCallback('review-shell-ready');"
+                    def do_eval():
+                        self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+                    NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+                else:
+                    self.coordinator.start_review_terminal(80, 24)
+                    # Register a callback to detect when the shell prompt is ready
+                    self.coordinator._review_pending_callbacks['review-shell-ready'] = {
+                        'pattern': 'shell',
+                        'buffer': '',
+                        'command': '(shell startup)',
+                    }
             elif msg_type == 'writeReviewInput':
                 data = msg.get('data', '')
                 self.coordinator.write_to_review_terminal(data)
@@ -461,6 +496,18 @@ class NativeBridgeHandler(NSObject):
                 tab_id = msg.get('tabId', '')
                 self.coordinator.active_codex_sessions.pop(tab_id, None)
                 self.coordinator.log('info', 'untrackCodexSession', f'tab={tab_id}')
+
+            # Confirmation dialog
+            elif msg_type == 'showConfirmationDialog':
+                request_id = msg.get('requestId')
+                dialog_data = msg.get('data', {})
+                self.coordinator.show_confirmation_dialog(str(request_id), dialog_data)
+
+            # JS console forwarding
+            elif msg_type == 'jsConsole':
+                level = msg.get('level', 'log')
+                message = msg.get('message', '')
+                self.coordinator.log('js', level, message)
 
         except Exception as e:
             print(f"NativeBridgeHandler error: {e}")
@@ -547,12 +594,15 @@ class NativeBridgeHandler(NSObject):
             self._send_response(request_id, {'success': False, 'error': str(e)})
 
     def _handle_write_file(self, msg):
-        """Write file contents."""
+        """Write file contents. Auto-creates parent directories if needed."""
         request_id = msg.get('requestId')
         path = msg.get('path', '')
         content = msg.get('content', '')
         
         try:
+            parent_dir = os.path.dirname(path)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
             self._send_response(request_id, {'success': True})
@@ -1144,12 +1194,16 @@ class AppCoordinator:
 
     def stop_change_terminal(self, tab_id: str):
         """Stop a change terminal and release resources."""
+        import traceback
+        self.log('info', 'stop_change_terminal', f'tab={tab_id}, caller_stack=\n{"".join(traceback.format_stack()[-4:-1])}')
         if tab_id in self.change_terminals:
             terminal = self.change_terminals[tab_id]
             if terminal._alive:
-                self.log('info', 'stop_change_terminal', f'tab={tab_id}')
+                self.log('info', 'stop_change_terminal', f'tab={tab_id}, killing terminal (pid={terminal.pid})')
                 terminal.kill()
             del self.change_terminals[tab_id]
+        else:
+            self.log('warn', 'stop_change_terminal', f'tab={tab_id}, terminal NOT FOUND')
         if tab_id in self._change_pending_callbacks:
             del self._change_pending_callbacks[tab_id]
 
@@ -1236,6 +1290,110 @@ class AppCoordinator:
                 self.webview.evaluateJavaScript_completionHandler_(js, None)
             NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
 
+    # ─── Confirmation Dialog ────────────────────────────────────────
+
+    def show_confirmation_dialog(self, request_id: str, dialog_data: dict):
+        """Create an independent NSWindow with WKWebView for the confirmation dialog."""
+        self.log('info', 'showConfirmationDialog', f'requestId={request_id}, items={len(dialog_data.get("items", []))}')
+
+        def do_create():
+            try:
+                # Window size and position
+                screen = NSScreen.mainScreen().frame()
+                w, h = 560, 520
+                x = (screen.size.width - w) / 2
+                y = (screen.size.height - h) / 2
+
+                style = (NSWindowStyleMaskTitled |
+                         NSWindowStyleMaskClosable |
+                         NSWindowStyleMaskResizable)
+
+                window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+                    NSMakeRect(x, y, w, h), style, NSBackingStoreBuffered, False
+                )
+                window.setTitle_("确认选择")
+                window.setMinSize_((400, 350))
+
+                # WKWebView with message handler
+                wk_config = WKWebViewConfiguration.alloc().init()
+                uc = wk_config.userContentController()
+
+                handler = ConfirmationDialogHandler.alloc().initWithCoordinator_requestId_(self, request_id)
+                handler.dialog_window = window
+                uc.addScriptMessageHandler_name_(handler, "confirmationResult")
+
+                # Inject dialog data script BEFORE loading HTML to avoid race condition
+                data_json = json.dumps(dialog_data, ensure_ascii=False)
+                b64 = base64.b64encode(data_json.encode('utf-8')).decode('ascii')
+                inject_js = f"""
+                setTimeout(function() {{
+                    if (window.initDialog) {{
+                        var b = atob('{b64}');
+                        var a = new Uint8Array(b.length);
+                        for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                        var text = new TextDecoder('utf-8').decode(a);
+                        window.initDialog(text);
+                    }}
+                }}, 100);
+                """
+                uc.addUserScript_(WKUserScript.alloc().initWithSource_injectionTime_forMainFrameOnly_(
+                    inject_js, 1, True  # injectionTime=1 → AtDocumentEnd
+                ))
+
+                webview = WKWebView.alloc().initWithFrame_configuration_(
+                    NSMakeRect(0, 0, w, h), wk_config
+                )
+
+                # Load the HTML file AFTER scripts are registered
+                html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'confirmation_dialog.html')
+                with open(html_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+                webview.loadHTMLString_baseURL_(html_content, None)
+
+                window.setContentView_(webview)
+
+                # Window delegate to handle close button
+                win_delegate = ConfirmationWindowDelegate.alloc().initWithHandler_(handler)
+                window.setDelegate_(win_delegate)
+
+                # Keep references alive
+                window._confirmation_handler = handler
+                window._confirmation_delegate = win_delegate
+                window._confirmation_webview = webview
+
+                window.makeKeyAndOrderFront_(None)
+                window.setLevel_(3)  # NSFloatingWindowLevel — stay on top
+
+            except Exception as e:
+                print(f"show_confirmation_dialog error: {e}")
+                self._send_confirmation_response(request_id, {'action': 'cancel'})
+
+        NSOperationQueue.mainQueue().addOperationWithBlock_(do_create)
+
+    def _send_confirmation_response(self, request_id: str, result: dict):
+        """Send the confirmation dialog result back to the main webview."""
+        if not self.webview:
+            return
+        payload = json.dumps({'requestId': request_id, **result}, ensure_ascii=False)
+        b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+        js = f"""
+        if (window.__nativeBridgeResponse) {{
+            try {{
+                var b = atob('{b64}');
+                var a = new Uint8Array(b.length);
+                for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                var text = new TextDecoder('utf-8').decode(a);
+                window.__nativeBridgeResponse(JSON.parse(text));
+            }} catch (e) {{
+                console.error('[ConfirmationDialog] Failed to parse response:', e);
+            }}
+        }}
+        """
+        def do_eval():
+            self.webview.evaluateJavaScript_completionHandler_(js, None)
+        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+        self.log('callback', 'confirmation_result', f'requestId={request_id}, action={result.get("action")}')
+
     def notify_web_refresh(self, data: dict):
         """Notify the web app that a hook event occurred (e.g. file changed, session ended)."""
         if not self.webview:
@@ -1278,6 +1436,78 @@ class AppCoordinator:
 
 
 # ─── WKUIDelegate for JS alert/confirm/prompt ─────────────────────
+
+# ─── Confirmation Dialog (Independent Window) ─────────────────────
+
+class ConfirmationDialogHandler(NSObject):
+    """Handle messages from the confirmation dialog WKWebView."""
+
+    def initWithCoordinator_requestId_(self, coordinator, request_id):
+        self = objc.super(ConfirmationDialogHandler, self).init()
+        if self is None:
+            return None
+        self.coordinator = coordinator
+        self.request_id = request_id
+        self.dialog_window = None
+        return self
+
+    def userContentController_didReceiveScriptMessage_(self, controller, message):
+        try:
+            body = message.body()
+            if isinstance(body, str):
+                data = json.loads(body)
+            elif isinstance(body, dict):
+                data = body
+            else:
+                return
+
+            action = data.get('action', '')
+            if action == 'confirm':
+                selected_items = data.get('selectedItems', [])
+                self._send_result({'action': 'confirm', 'selectedItems': selected_items})
+            elif action == 'cancel':
+                self._send_result({'action': 'cancel'})
+        except Exception as e:
+            print(f"ConfirmationDialogHandler error: {e}")
+            self._send_result({'action': 'cancel'})
+
+    def _send_result(self, result):
+        """Send result back to the main webview and close the dialog window.
+        
+        Uses _did_send guard to prevent duplicate responses (e.g. close()
+        triggering windowWillClose_ after confirm/cancel already sent).
+        """
+        if getattr(self, '_did_send', False):
+            return
+        self._did_send = True
+        if self.coordinator:
+            self.coordinator._send_confirmation_response(self.request_id, result)
+        if self.dialog_window:
+            def do_close():
+                self.dialog_window.close()
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_close)
+
+    def windowWillClose_(self, notification):
+        """Handle window close via the X button — treat as cancel."""
+        self._send_result({'action': 'cancel'})
+
+
+class ConfirmationWindowDelegate(NSObject):
+    """NSWindowDelegate to detect when the confirmation window is closed."""
+
+    def initWithHandler_(self, handler):
+        self = objc.super(ConfirmationWindowDelegate, self).init()
+        if self is None:
+            return None
+        self.handler = handler
+        self._did_respond = False
+        return self
+
+    def windowWillClose_(self, notification):
+        if not self._did_respond and not getattr(self.handler, '_did_send', False):
+            self._did_respond = True
+            self.handler._send_result({'action': 'cancel'})
+
 
 class WebViewUIDelegate(NSObject):
     """Handle JavaScript alert(), confirm(), and prompt() dialogs in WKWebView."""
@@ -1347,75 +1577,31 @@ class LogPanelActions(NSObject):
 
 
 def build_log_panel(coordinator, frame):
-    """Build the native log panel: toolbar + NSScrollView + NSTextView.
+    """Build the native log panel: NSScrollView + NSTextView.
     Returns (container_view, text_view, actions_delegate).
     """
     w = frame.size.width
     h = frame.size.height
-    toolbar_h = 26
 
     container = NSView.alloc().initWithFrame_(frame)
 
-    # ── Toolbar (NSBox for colored background) ──
-    from Cocoa import NSBox, NSTextField
-    toolbar = NSBox.alloc().initWithFrame_(NSMakeRect(0, h - toolbar_h, w, toolbar_h))
-    toolbar.setBoxType_(4)  # NSBoxCustom
-    toolbar.setFillColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.086, 0.086, 0.165, 1.0))
-    toolbar.setBorderWidth_(0)
-    toolbar.setTitlePosition_(0)  # NSNoTitle
-    toolbar.setAutoresizingMask_(1 << 1 | 1 << 4)  # NSViewWidthSizable | NSViewMinYMargin
-
-    # Title label
-    title = NSTextField.alloc().initWithFrame_(NSMakeRect(10, 3, 150, 18))
-    title.setStringValue_("📋 Message Log")
-    title.setBezeled_(False)
-    title.setDrawsBackground_(False)
-    title.setEditable_(False)
-    title.setSelectable_(False)
-    title.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.53, 0.53, 0.67, 1.0))
-    title.setFont_(NSFont.boldSystemFontOfSize_(11.0))
-    toolbar.addSubview_(title)
-
-    # Actions delegate
+    # Actions delegate (kept for API compatibility)
     actions = LogPanelActions.alloc().initWithCoordinator_(coordinator)
 
-    # Auto-scroll button
-    auto_btn = NSButton.alloc().initWithFrame_(NSMakeRect(w - 200, 2, 110, 20))
-    auto_btn.setTitle_("Auto-scroll: ON")
-    auto_btn.setBezelStyle_(14)  # NSBezelStyleRecessed
-    auto_btn.setFont_(NSFont.systemFontOfSize_(10.0))
-    auto_btn.setTarget_(actions)
-    auto_btn.setAction_(objc.selector(actions.toggleAutoScroll_, signature=b'v@:@'))
-    auto_btn.setAutoresizingMask_(1 << 0)  # NSViewMinXMargin
-    actions.auto_scroll_btn = auto_btn
-    toolbar.addSubview_(auto_btn)
-
-    # Clear button
-    clear_btn = NSButton.alloc().initWithFrame_(NSMakeRect(w - 80, 2, 60, 20))
-    clear_btn.setTitle_("Clear")
-    clear_btn.setBezelStyle_(14)  # NSBezelStyleRecessed
-    clear_btn.setFont_(NSFont.systemFontOfSize_(10.0))
-    clear_btn.setTarget_(actions)
-    clear_btn.setAction_(objc.selector(actions.clearLog_, signature=b'v@:@'))
-    clear_btn.setAutoresizingMask_(1 << 0)  # NSViewMinXMargin
-    toolbar.addSubview_(clear_btn)
-
-    container.addSubview_(toolbar)
-
     # ── Scroll View + Text View ──
-    scroll_frame = NSMakeRect(0, 0, w, h - toolbar_h)
+    scroll_frame = NSMakeRect(0, 0, w, h)
     scroll_view = NSScrollView.alloc().initWithFrame_(scroll_frame)
     scroll_view.setHasVerticalScroller_(True)
     scroll_view.setHasHorizontalScroller_(False)
     scroll_view.setAutoresizingMask_(1 << 1 | 1 << 4)  # NSViewWidthSizable | NSViewHeightSizable
 
-    text_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h - toolbar_h))
+    text_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
     text_view.setEditable_(False)
     text_view.setSelectable_(True)
     text_view.setRichText_(True)
     text_view.setUsesFontPanel_(False)
     text_view.setAutoresizingMask_(1 << 1)  # NSViewWidthSizable
-    text_view.setMinSize_(NSMakeSize(0, h - toolbar_h))
+    text_view.setMinSize_(NSMakeSize(0, h))
     text_view.setMaxSize_(NSMakeSize(1e7, 1e7))
     text_view.textContainer().setWidthTracksTextView_(True)
     text_view.setVerticallyResizable_(True)
@@ -1438,6 +1624,9 @@ class AppDelegate(NSObject):
 
     def applicationDidFinishLaunching_(self, notification):
         self.coordinator = AppCoordinator()
+        # Restore log panel visibility from last session (default: visible)
+        app_config_init = load_config()
+        self.log_visible = app_config_init.get('logPanelVisible', True)
         
         # Start Vite dev server
         self.vite_process = start_vite_server()
@@ -1487,6 +1676,28 @@ class AppDelegate(NSObject):
         inject_js += "window.__lastDirectory = '" + last_dir_js + "';\n"
         inject_js += "window.__savedSessions = JSON.parse('" + saved_sessions_json + "');\n"
         inject_js += """
+        // Console log interceptor — forward JS logs to native log panel
+        (function() {
+            var origLog = console.log, origWarn = console.warn, origError = console.error;
+            function forward(level, args) {
+                try {
+                    var msg = Array.prototype.map.call(args, function(a) {
+                        if (a instanceof Error) return a.message + '\\n' + a.stack;
+                        if (typeof a === 'object') try { return JSON.stringify(a); } catch(e) { return String(a); }
+                        return String(a);
+                    }).join(' ');
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {
+                        window.webkit.messageHandlers.nativeBridge.postMessage(
+                            JSON.stringify({type: 'jsConsole', level: level, message: msg.substring(0, 2000)})
+                        );
+                    }
+                } catch(e) {}
+            }
+            console.log = function() { forward('log', arguments); origLog.apply(console, arguments); };
+            console.warn = function() { forward('warn', arguments); origWarn.apply(console, arguments); };
+            console.error = function() { forward('error', arguments); origError.apply(console, arguments); };
+        })();
+
         // Request/response tracking
         window.__nativePending = {};
         window.__nativeRequestId = 0;
@@ -1646,6 +1857,11 @@ class AppDelegate(NSObject):
                 window.webkit.messageHandlers.nativeBridge.postMessage(
                     JSON.stringify({type: 'untrackCodexSession', tabId: tabId})
                 );
+            },
+            
+            // Confirmation dialog (opens independent native window, returns Promise)
+            showConfirmationDialog: function(data) {
+                return nativeRequest({type: 'showConfirmationDialog', data: data});
             }
         };
         """
@@ -1676,6 +1892,14 @@ class AppDelegate(NSObject):
         self.outer_split.adjustSubviews()
         self.outer_split.setPosition_ofDividerAtIndex_(int(h * 0.75), 0)
 
+        # Apply saved log panel visibility state
+        if not self.log_visible:
+            self.log_panel.setHidden_(True)
+            self.outer_split.adjustSubviews()
+            # Update menu item title to match
+            if hasattr(self, 'log_toggle_menu_item') and self.log_toggle_menu_item:
+                self.log_toggle_menu_item.setTitle_("Show Log")
+
         self.window.setContentView_(self.outer_split)
         self.window.makeKeyAndOrderFront_(None)
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
@@ -1688,6 +1912,28 @@ class AppDelegate(NSObject):
         self.http_server = start_http_server(self.coordinator, port=18888)
         print("App started. Terminal PTY running.")
 
+    def toggleLogPanel_(self, sender):
+        """Toggle log panel visibility."""
+        if self.log_visible:
+            # Hide log panel
+            self.log_panel.setHidden_(True)
+            self.outer_split.adjustSubviews()
+            self.log_visible = False
+            sender.setTitle_("Show Log")
+        else:
+            # Show log panel
+            self.log_panel.setHidden_(False)
+            # Restore split position
+            h = self.window.frame().size.height
+            self.outer_split.setPosition_ofDividerAtIndex_(int(h * 0.75), 0)
+            self.outer_split.adjustSubviews()
+            self.log_visible = True
+            sender.setTitle_("Hide Log")
+        # Persist visibility state
+        config = load_config()
+        config['logPanelVisible'] = self.log_visible
+        save_config(config)
+
     def applicationShouldTerminateAfterLastWindowClosed_(self, app):
         return True
 
@@ -1695,6 +1941,9 @@ class AppDelegate(NSObject):
         # Save active worker sessions before terminating
         if hasattr(self, 'coordinator'):
             self._save_active_sessions()
+            # Kill all change terminals
+            for tab_id in list(self.coordinator.change_terminals.keys()):
+                self.coordinator.stop_change_terminal(tab_id)
             if self.coordinator.terminal:
                 self.coordinator.terminal.kill()
         # Stop Vite dev server
@@ -1769,9 +2018,17 @@ def main():
     edit_menu.addItemWithTitle_action_keyEquivalent_("Select All", "selectAll:", "a")
     edit_menu_item.setSubmenu_(edit_menu)
 
+    # View menu (for log panel toggle)
+    view_menu_item = NSMenuItem.alloc().init()
+    menubar.addItem_(view_menu_item)
+    view_menu = NSMenu.alloc().initWithTitle_("View")
+    log_toggle_item = view_menu.addItemWithTitle_action_keyEquivalent_("Hide Log", "toggleLogPanel:", "l")
+    view_menu_item.setSubmenu_(view_menu)
+
     app.setMainMenu_(menubar)
 
     delegate = AppDelegate.alloc().init()
+    delegate.log_toggle_menu_item = log_toggle_item
     app.setDelegate_(delegate)
     app.activateIgnoringOtherApps_(True)
     app.run()

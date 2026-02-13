@@ -3,11 +3,11 @@ import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
 
-type TerminalChannel = 'main' | 'review' | 'change'
+type TerminalChannel = 'main' | 'review' | 'droid' | 'codex'
 
 interface EmbeddedTerminalProps {
   channel?: TerminalChannel
-  tabId?: string  // Required for 'change' channel
+  tabId?: string  // Required for 'droid' and 'codex' channels
 }
 
 function decodeBase64ToBytes(base64: string): Uint8Array {
@@ -111,8 +111,8 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
       window.__onTerminalOutputBytes = (base64: string) => {
         term.write(decodeBase64ToBytes(base64))
       }
-    } else if (channel === 'change' && tabId) {
-      // Keyboard Input → Native PTY (change, per-tab)
+    } else if ((channel === 'droid' || channel === 'codex') && tabId) {
+      // Keyboard Input → Native PTY (per-tab worker terminal)
       term.onData((data) => {
         if (window.__nativeBridge) {
           window.__nativeBridge.writeChangeInput(tabId, data)
@@ -123,7 +123,7 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
           window.__nativeBridge.writeChangeInput(tabId, data)
         }
       })
-      // Receive Output from Native PTY (change, per-tab)
+      // Receive Output from Native PTY (per-tab)
       if (!window.__onChangeTerminalOutput) window.__onChangeTerminalOutput = {}
       if (!window.__onChangeTerminalOutputBytes) window.__onChangeTerminalOutputBytes = {}
       window.__onChangeTerminalOutput[tabId] = (text: string) => {
@@ -167,11 +167,11 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
       if (channel === 'main' && window.webkit?.messageHandlers?.terminalResize) {
         window.webkit.messageHandlers.terminalResize.postMessage({ cols, rows })
         console.log(`Terminal [${channel}] resized: ${cols}x${rows}`)
-      } else if (channel === 'change' && tabId && window.webkit?.messageHandlers?.nativeBridge) {
+      } else if ((channel === 'droid' || channel === 'codex') && tabId && window.webkit?.messageHandlers?.nativeBridge) {
         window.webkit.messageHandlers.nativeBridge.postMessage(
           JSON.stringify({ type: 'changeTerminalResize', tabId, cols, rows })
         )
-        console.log(`Terminal [change:${tabId}] resized: ${cols}x${rows}`)
+        console.log(`Terminal [${channel}:${tabId}] resized: ${cols}x${rows}`)
       } else if (channel === 'review' && window.webkit?.messageHandlers?.nativeBridge) {
         window.webkit.messageHandlers.nativeBridge.postMessage(
           JSON.stringify({ type: 'reviewTerminalResize', cols, rows })
@@ -233,7 +233,7 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
               if (window.webkit?.messageHandlers?.terminalInput) {
                 window.webkit.messageHandlers.terminalInput.postMessage(text)
               }
-            } else if (channel === 'change' && tabId) {
+            } else if ((channel === 'droid' || channel === 'codex') && tabId) {
               if (window.__nativeBridge) {
                 window.__nativeBridge.writeChangeInput(tabId, text)
               }
@@ -261,7 +261,7 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
       if (channel === 'main') {
         window.__onTerminalOutput = undefined
         window.__onTerminalOutputBytes = undefined
-      } else if (channel === 'change' && tabId) {
+      } else if ((channel === 'droid' || channel === 'codex') && tabId) {
         if (window.__onChangeTerminalOutput) {
           delete window.__onChangeTerminalOutput[tabId]
         }

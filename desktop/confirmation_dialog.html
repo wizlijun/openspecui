@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #cba6f7;
+  margin-bottom: 4px;
+}
+
+.header .subtitle {
+  font-size: 12px;
+  color: #6c7086;
+}
+
+.context {
+  padding: 12px 24px;
+  font-size: 13px;
+  color: #a6adc8;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.context-line {
+  padding: 2px 0;
+}
+
+.items-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 24px;
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.item:hover {
+  background: #313244;
+}
+
+.item.checked {
+  background: rgba(166, 227, 161, 0.08);
+}
+
+.item input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #585b70;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 1px;
+  position: relative;
+  transition: all 0.15s;
+}
+
+.item input[type="checkbox"]:checked {
+  background: #a6e3a1;
+  border-color: #a6e3a1;
+}
+
+.item input[type="checkbox"]:checked::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #1e1e2e;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.item-text {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #cdd6f4;
+}
+
+.item.checked .item-text {
+  color: #a6e3a1;
+}
+
+.footer {
+  padding: 16px 24px;
+  border-top: 1px solid #313244;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  background: #181825;
+}
+
+.selection-info {
+  font-size: 12px;
+  color: #6c7086;
+}
+
+.footer-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-cancel {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.btn-cancel:hover {
+  background: #45475a;
+}
+
+.btn-confirm {
+  background: #a6e3a1;
+  color: #1e1e2e;
+}
+
+.btn-confirm:hover {
+  background: #94e2d5;
+}
+
+.btn-confirm:disabled {
+  background: #45475a;
+  color: #6c7086;
+  cursor: not-allowed;
+}
+
+.select-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 24px 0;
+  flex-shrink: 0;
+}
+
+.select-action-btn {
+  background: none;
+  border: 1px solid #45475a;
+  color: #6c7086;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.select-action-btn:hover {
+  border-color: #cba6f7;
+  color: #cba6f7;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>请确认选择</h1>
+  <div class="subtitle">请勾选需要确认的项目，然后点击确认</div>
+</div>
+
+<div id="context" class="context" style="display:none;"></div>
+
+<div class="select-actions">
+  <button class="select-action-btn" onclick="selectAll()">全选</button>
+  <button class="select-action-btn" onclick="selectNone()">全不选</button>
+</div>
+
+<div id="items" class="items-container"></div>
+
+<div class="footer">
+  <span id="selection-info" class="selection-info">已选择 0 项</span>
+  <div class="footer-buttons">
+    <button class="btn btn-cancel" onclick="handleCancel()">取消</button>
+    <button id="btn-confirm" class="btn btn-confirm" onclick="handleConfirm()" disabled>确认</button>
+  </div>
+</div>
+
+<script>
+var items = [];
+var contextLines = [];
+
+// Called from Python to initialize the dialog data
+window.initDialog = function(data) {
+  try {
+    var parsed = JSON.parse(data);
+    items = parsed.items || [];
+    contextLines = parsed.contextLines || [];
+  } catch(e) {
+    items = [];
+    contextLines = [];
+  }
+  render();
+};
+
+function render() {
+  // Context
+  var ctxEl = document.getElementById('context');
+  if (contextLines.length > 0) {
+    ctxEl.style.display = 'block';
+    ctxEl.innerHTML = contextLines.map(function(l) {
+      return '<div class="context-line">' + escapeHtml(l) + '</div>';
+    }).join('');
+  }
+
+  // Items
+  var container = document.getElementById('items');
+  container.innerHTML = '';
+  items.forEach(function(item, index) {
+    var div = document.createElement('div');
+    div.className = 'item' + (item.checked ? ' checked' : '');
+    div.onclick = function() { toggleItem(index); };
+
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = item.checked;
+    cb.onclick = function(e) { e.stopPropagation(); toggleItem(index); };
+
+    var span = document.createElement('span');
+    span.className = 'item-text';
+    span.textContent = item.text;
+
+    div.appendChild(cb);
+    div.appendChild(span);
+    container.appendChild(div);
+  });
+
+  updateFooter();
+}
+
+function toggleItem(index) {
+  items[index].checked = !items[index].checked;
+  render();
+}
+
+function selectAll() {
+  items.forEach(function(item) { item.checked = true; });
+  render();
+}
+
+function selectNone() {
+  items.forEach(function(item) { item.checked = false; });
+  render();
+}
+
+function updateFooter() {
+  var count = items.filter(function(i) { return i.checked; }).length;
+  document.getElementById('selection-info').textContent = '已选择 ' + count + ' 项';
+  document.getElementById('btn-confirm').disabled = count === 0;
+}
+
+function handleConfirm() {
+  var selected = items.filter(function(i) { return i.checked; }).map(function(i) { return i.text; });
+  if (selected.length > 0) {
+    window.webkit.messageHandlers.confirmationResult.postMessage(
+      JSON.stringify({ action: 'confirm', selectedItems: selected })
+    );
+  }
+}
+
+function handleCancel() {
+  window.webkit.messageHandlers.confirmationResult.postMessage(
+    JSON.stringify({ action: 'cancel' })
+  );
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+</script>
+</body>
+</html>

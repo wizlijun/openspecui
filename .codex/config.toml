@@ -44,5 +44,56 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # OpenSpec Desktop notify hook
 notify = ["bash", "/Users/bruce/git/openspecui/.codex/notify.sh"]

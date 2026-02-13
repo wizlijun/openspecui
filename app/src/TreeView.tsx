@@ -142,7 +142,7 @@ function TreeNode({ node, depth, onSelectNode, selectedSpec, onContinueChange, o
                 Continue Change
               </div>
               <div className="tree-context-menu-item" onClick={handleCodexChange}>
-                Codex Worker
+                Code Review
               </div>
             </>
           )}

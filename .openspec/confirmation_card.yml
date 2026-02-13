@@ -1,0 +1,49 @@
+# Human Confirmation Card 配置
+# 定义不同场景下确认弹窗的标题和按钮
+
+# 场景配置
+scenarios:
+  # 默认场景 - 简单的确认/取消（硬编码在代码中，这里仅作文档说明）
+  # default:
+  #   title: "请确认"
+  #   buttons:
+  #     - label: "Cancel"
+  #       action: "cancel"
+  #     - label: "Submit"
+  #       action: "submit"
+
+  # Review Confirm 场景 - 当消息前面有 [fix_confirmation] 标记时激活
+  review_confirm:
+    # 触发条件：消息开头包含此标记
+    trigger: "[fix_confirmation]"
+    title: "请确认评审修复项"
+    description: "选择需要修复的评审项目，然后选择修复方式"
+    buttons:
+      # 取消按钮
+      - label: "取消"
+        action: "cancel"
+        style: "secondary"
+      
+      # Fix 按钮 - 在当前 Codex Worker 中直接提交修复
+      - label: "Fix"
+        action: "fix"
+        style: "primary"
+        message_template: "请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}"
+        target: "current"
+        requires_selection: true
+        
+      # Droid Fix 按钮 - 将选中项发送到绑定的 Droid Worker
+      - label: "Droid Fix"
+        action: "droid_fix"
+        style: "primary"
+        message_template: "请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}"
+        target: "droid_worker"
+        requires_selection: true
+        
+      # Auto Fix 按钮 - 自动循环 Fix → Review 直到无确认项，完成后撒花庆祝
+      - label: "Auto Fix"
+        action: "auto_fix"
+        style: "primary"
+        message_template: "请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}"
+        target: "current"
+        requires_selection: true

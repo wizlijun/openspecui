@@ -7,11 +7,14 @@ import { Canvas } from './Canvas'
 import { EditorPanel } from './EditorPanel'
 import { EmbeddedTerminal } from './EmbeddedTerminal'
 import { FolderPlusIcon, PlusCircleIcon, CloseIcon, RefreshIcon } from './Icons'
-import { saveHistoryEntry } from './inputHistoryService'
-import { MarkdownWithCheckbox } from './MarkdownWithCheckbox'
 import { DroidWorkerBase } from './DroidWorkerBase'
 import type { WorkerMode, DroidWorkerConfig } from './DroidWorkerBase'
 import { loadWorkerConfigs, DEFAULT_WORKER_CONFIGS } from './loadWorkerConfig'
+import { CodexWorkerBase } from './CodexWorkerBase'
+import type { CodexWorkerMode, CodexWorkerConfig } from './CodexWorkerBase'
+import { loadCodexWorkerConfigs, DEFAULT_CODEX_CONFIGS } from './loadCodexWorkerConfig'
+import { loadConfirmationCardConfig, DEFAULT_CONFIRMATION_CARD_CONFIG } from './loadConfirmationCardConfig'
+import type { ConfirmationCardConfig } from './loadConfirmationCardConfig'
 
 // Tab types
 type TabType = 'viewer' | 'change' | 'codex'
@@ -25,370 +28,12 @@ interface ChangeTab {
 
 interface CodexTab {
   id: string
+  mode: CodexWorkerMode
   changeId?: string  // Optional: if provided, context is for this change
   resumeSessionId?: string  // If provided, resume existing session
 }
 
-const normalizeEventToken = (value: unknown): string =>
-  String(value ?? '').trim().toLowerCase().replace(/[\/_\s]+/g, '-')
 
-const isCodexTurnComplete = (data: any): boolean => {
-  if (data?.codex_is_done === true) return true
-
-  const doneTokens = new Set([
-    'agent-turn-complete',
-    'agent-turn-completed',
-    'agent-turn-done',
-    'turn-complete',
-    'turn-completed',
-    'turn-done',
-    'item-complete',
-    'item-completed',
-    'session-complete',
-    'session-completed',
-    'response-complete',
-    'response-completed',
-    'response-done',
-    'message-complete',
-    'message-completed',
-    'message-done',
-    'completion',
-    'completed',
-    'done',
-    'finished',
-    'stop',
-    'stopped',
-  ])
-
-  const eventCandidates = [
-    data?.codex_event_type,
-    data?.event_type,
-    data?.type,
-    data?.hook_event_name,
-    data?.payload?.type,
-    data?.payload?.event_type,
-    data?.payload?.hook_event_name,
-    data?.payload?.event,
-  ]
-
-  for (const candidate of eventCandidates) {
-    const raw = String(candidate ?? '').trim().toLowerCase()
-    if (raw.endsWith('/complete') || raw.endsWith('/completed') || raw.endsWith('/done') || raw.endsWith('/finished')) {
-      return true
-    }
-    const token = normalizeEventToken(candidate)
-    if (!token) continue
-    if (doneTokens.has(token) || token.endsWith('-complete') || token.endsWith('-completed') || token.endsWith('-done') || token.endsWith('-finished')) {
-      return true
-    }
-  }
-
-  const statusCandidates = [data?.status, data?.payload?.status]
-  for (const status of statusCandidates) {
-    const token = normalizeEventToken(status)
-    if (['complete', 'completed', 'done', 'finished', 'stopped', 'success', 'ok'].includes(token)) {
-      return true
-    }
-  }
-
-  return Boolean(data?.done || data?.complete || data?.payload?.done || data?.payload?.complete)
-}
-
-const extractCodexFinalMessage = (data: any): string | null => {
-  const candidates = [
-    data?.payload?.['last-assistant-message'],
-    data?.payload?.last_assistant_message,
-    data?.['last-assistant-message'],
-    data?.last_assistant_message,
-    data?.payload?.last_result,
-    data?.last_result,
-  ]
-
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim()) return candidate
-  }
-  return null
-}
-
-
-
-
-// ─── Codex Worker Panel ────────────────────────────────────────────
-
-interface CodexPanelProps {
-  tabId: string  // Unique tab ID for tracking
-  changeId?: string
-  projectPath: string | undefined
-  resumeSessionId?: string  // If provided, resume existing codex session
-  onStopHookRef: React.MutableRefObject<((data: any) => void) | null>
-  onRefresh: () => void
-  sessionIdRef: React.MutableRefObject<string | null>
-  onSessionId?: (id: string) => void
-  onBusyChange?: (busy: boolean) => void
-}
-
-function CodexPanel({ tabId, changeId, projectPath, resumeSessionId, onStopHookRef, onRefresh, sessionIdRef, onSessionId, onBusyChange }: CodexPanelProps) {
-  const [message, setMessage] = useState('')
-  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
-  const [waiting, setWaiting] = useState(false)
-  const [stopped, setStopped] = useState(false)
-  const [initialized, setInitialized] = useState(false)
-  const [showInitButton, setShowInitButton] = useState(true)
-  const initCalledRef = useRef(false)
-  const resultRef = useRef<HTMLDivElement>(null)
-
-  // Stable refs for callback props to avoid re-triggering effects
-  const onRefreshRef = useRef(onRefresh)
-  onRefreshRef.current = onRefresh
-  const onSessionIdRef = useRef(onSessionId)
-  onSessionIdRef.current = onSessionId
-
-  useEffect(() => {
-    if (resultRef.current) {
-      resultRef.current.scrollTop = resultRef.current.scrollHeight
-    }
-  }, [history])
-
-  useEffect(() => {
-    onBusyChange?.(waiting)
-  }, [waiting, onBusyChange])
-
-  useEffect(() => {
-    onStopHookRef.current = (data: any) => {
-      const eventName = data.event || ''
-      if (eventName === 'codex-notify') {
-        // Always try to capture session_id from codex events
-        const sid = data.session_id || data.payload?.['thread-id'] || data.payload?.thread_id || null
-        if (sid && !sessionIdRef.current) {
-          sessionIdRef.current = sid
-          onSessionIdRef.current?.(sid)
-          // Track session in Python for persistence
-          if (bridge) bridge.trackCodexSession(tabId, sid, changeId)
-        }
-        // Only update UI when the task is actually done
-        if (isCodexTurnComplete(data)) {
-          const finalMessage = extractCodexFinalMessage(data) || '✅ Codex task completed.'
-          setHistory(prev => [...prev, { role: 'assistant', text: finalMessage }])
-          setWaiting(false)
-          if (onRefreshRef.current) onRefreshRef.current()
-        }
-      } else if (eventName === 'Stop') {
-        // Droid Stop hook
-        const result = data.last_result || '(no response)'
-        setHistory(prev => [...prev, { role: 'assistant', text: result }])
-        setWaiting(false)
-        if (onRefreshRef.current) onRefreshRef.current()
-      }
-    }
-    return () => { onStopHookRef.current = null }
-  }, [onStopHookRef, tabId, changeId])
-
-  const bridge = window.__nativeBridge
-  if (!bridge) return <div className="panel-empty">Native bridge not available</div>
-
-  const sendToReview = (text: string) => {
-    bridge.writeReviewInput(text)
-    setTimeout(() => bridge.writeReviewInput('\r'), 200)
-  }
-
-  const shellSingleQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
-
-  const buildCodexStartCommand = () => {
-    if (resumeSessionId) {
-      const notifyScriptPath = projectPath ? `${projectPath}/openspec/codex-notify.sh` : './openspec/codex-notify.sh'
-      const notifyConfig = `notify=["bash",${JSON.stringify(notifyScriptPath)}]`
-      return `codex resume ${resumeSessionId} -c ${shellSingleQuote(notifyConfig)}`
-    }
-    const notifyScriptPath = projectPath ? `${projectPath}/openspec/codex-notify.sh` : './openspec/codex-notify.sh'
-    const notifyConfig = `notify=["bash",${JSON.stringify(notifyScriptPath)}]`
-    return `codex -c ${shellSingleQuote(notifyConfig)}`
-  }
-
-  const handleInit = () => {
-    if (initCalledRef.current) return
-    initCalledRef.current = true
-    
-    setShowInitButton(false)
-    
-    const isResumeMode = !!resumeSessionId
-    setInitialized(true)
-    setWaiting(true)
-    
-    const initMsg = isResumeMode
-      ? `[Init] Resuming codex session ${resumeSessionId!.slice(0, 8)}...`
-      : '[Init] Starting codex terminal → cd → reviewcmd.sh → codex'
-    setHistory(prev => [...prev, { role: 'user', text: initMsg }])
-
-    // In resume mode, we already know the session_id
-    if (isResumeMode) {
-      sessionIdRef.current = resumeSessionId!
-      if (onSessionId) onSessionId(resumeSessionId!)
-      // Track session in Python for persistence
-      if (bridge) bridge.trackCodexSession(tabId, resumeSessionId!, changeId)
-    }
-
-    // Save previous callback
-    const prevReviewCallback = window.__onReviewCommandCallback
-
-    const step3_startCodex = () => {
-      setHistory(prev => [...prev, { role: 'assistant', text: '✓ reviewcmd.sh sourced. Starting codex...' }])
-      window.__onReviewCommandCallback = (callbackId: string) => {
-        if (callbackId === 'review-codex') {
-          window.__onReviewCommandCallback = prevReviewCallback
-          setWaiting(false)
-          setHistory(prev => [...prev, { role: 'assistant', text: '✓ Codex is ready.' }])
-        }
-      }
-      bridge.runReviewCommandWithCallback(buildCodexStartCommand(), 'review-codex', 'droid')
-    }
-
-    const step2_sourceReviewCmd = () => {
-      setHistory(prev => [...prev, { role: 'assistant', text: '✓ cd done. Sourcing reviewcmd.sh...' }])
-      window.__onReviewCommandCallback = (callbackId: string) => {
-        if (callbackId === 'review-source') step3_startCodex()
-      }
-      bridge.runReviewCommandWithCallback('source ./openspec/reviewcmd.sh', 'review-source', 'shell')
-    }
-
-    const step1_cd = () => {
-      if (projectPath) {
-        window.__onReviewCommandCallback = (callbackId: string) => {
-          if (callbackId === 'review-cd') step2_sourceReviewCmd()
-        }
-        bridge.runReviewCommandWithCallback(`cd ${projectPath}`, 'review-cd', 'shell')
-      } else {
-        step2_sourceReviewCmd()
-      }
-    }
-
-    // Start the review PTY — backend registers 'review-shell-ready' callback
-    // Wait for shell prompt to be detected before sending first command
-    window.__onReviewCommandCallback = (callbackId: string) => {
-      if (callbackId === 'review-shell-ready') {
-        setHistory(prev => [...prev, { role: 'assistant', text: '✓ Shell ready.' }])
-        step1_cd()
-      }
-    }
-    bridge.startReviewTerminal(projectPath || '')
-  }
-
-  const handleSend = () => {
-    const trimmed = message.trim()
-    if (!trimmed) return
-    setHistory(prev => [...prev, { role: 'user', text: trimmed }])
-    setMessage('')
-    setWaiting(true)
-    if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, trimmed, `Codex Worker (${changeId || 'standalone'}) > 输入框`).catch(() => {})
-    sendToReview(trimmed)
-  }
-
-  const handleReview = () => {
-    const reviewPrompt = '严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。'
-    setHistory(prev => [...prev, { role: 'user', text: reviewPrompt }])
-    setWaiting(true)
-    if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, reviewPrompt, `Codex Worker (${changeId || 'standalone'}) > Review按钮`).catch(() => {})
-    sendToReview(reviewPrompt)
-  }
-
-  const handleStop = () => {
-    bridge.writeReviewInput('\x03')
-    setWaiting(false)
-    setStopped(true)
-    setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.metaKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
-  // Auto-init after all components are mounted
-  useEffect(() => {
-    if (!bridge) return
-    const raf = requestAnimationFrame(() => {
-      setTimeout(() => {
-        if (!initCalledRef.current) {
-          handleInit()
-        }
-      }, 300)
-    })
-    return () => cancelAnimationFrame(raf)
-  }, [bridge])
-
-  // Cleanup: untrack session on unmount
-  useEffect(() => {
-    return () => {
-      if (bridge) bridge.untrackCodexSession(tabId)
-    }
-  }, [bridge, tabId])
-
-  return (
-    <div className="wizard-panel">
-      <div className="wizard-panel-header">
-        <span className="wizard-panel-title">Codex Worker{changeId ? `: ${changeId}` : ''}{stopped ? ' (Stopped)' : ''}</span>
-      </div>
-
-      {/* Init screen */}
-      {showInitButton && !initialized && (
-        <div className="wizard-init-screen">
-          <p>Click the button below to initialize Codex Worker.</p>
-          <button className="btn-primary" onClick={handleInit} disabled={waiting}>
-            {waiting ? 'Initializing...' : 'Initialize Codex'}
-          </button>
-        </div>
-      )}
-
-      {history.length > 0 && (
-        <div className="wizard-history" ref={resultRef}>
-          {history.map((h, i) => (
-            <div key={i} className={`wizard-msg wizard-msg-${h.role}`}>
-              <span className="wizard-msg-role">{h.role === 'user' ? '▶' : '◀'}</span>
-              {h.role === 'assistant' && /- \[[ x]\]/i.test(h.text)
-                ? <MarkdownWithCheckbox text={h.text} className="wizard-msg-text" />
-                : <pre className="wizard-msg-text">{h.text}</pre>
-              }
-            </div>
-          ))}
-          {waiting && (
-            <div className="wizard-msg wizard-msg-loading">
-              <span className="wizard-spinner" />
-              <span>{initialized ? 'Codex is working...' : 'Initializing...'}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="wizard-input-area">
-        <label className="dialog-label">Send a message to Codex:</label>
-        <textarea
-          className="dialog-textarea"
-          value={message}
-          onChange={e => setMessage(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={initialized ? "Type a message to Codex..." : "Initializing Codex..."}
-          rows={3}
-          disabled={!initialized}
-        />
-      </div>
-
-      <div className="wizard-actions">
-        <div className="wizard-actions-left">
-          <button className="btn-secondary" onClick={handleReview} disabled={!initialized || waiting}>
-            Review
-          </button>
-          {waiting && (
-            <button className="btn-stop" onClick={handleStop}>⏹ Stop</button>
-          )}
-        </div>
-        <button className="btn-primary" onClick={handleSend} disabled={!initialized || !message.trim() || waiting}>
-          Send →
-        </button>
-      </div>
-    </div>
-  )
-}
 
 // ─── Main App ──────────────────────────────────────────────────────
 
@@ -408,11 +53,23 @@ function App() {
   const [changeBusyMap, setChangeBusyMap] = useState<Map<string, boolean>>(new Map())
   const [codexBusyMap, setCodexBusyMap] = useState<Map<string, boolean>>(new Map())
   const [changeResetKeys, setChangeResetKeys] = useState<Map<string, number>>(new Map())
+  const [changeAutoSendMessages, setChangeAutoSendMessages] = useState<Map<string, string>>(new Map())
   const [workerConfigs, setWorkerConfigs] = useState<Record<WorkerMode, DroidWorkerConfig>>(DEFAULT_WORKER_CONFIGS)
+  const [codexConfigs, setCodexConfigs] = useState<Record<CodexWorkerMode, CodexWorkerConfig>>(DEFAULT_CODEX_CONFIGS)
+  const [confirmationCardConfig, setConfirmationCardConfig] = useState<ConfirmationCardConfig>(DEFAULT_CONFIRMATION_CARD_CONFIG)
   const changeStopHookRefs = useRef<Map<string, ((data: any) => void) | null>>(new Map())
   const codexStopHookRefs = useRef<Map<string, ((data: any) => void) | null>>(new Map())
   const changeSessionIdRefs = useRef<Map<string, string | null>>(new Map())
   const codexSessionIdRefs = useRef<Map<string, string | null>>(new Map())
+  const changeSendMessageRefs = useRef<Map<string, ((message: string) => void) | null>>(new Map())
+  // Track codex tabs waiting for their first ping (session binding) with unique tokens.
+  // Maps pending_session_token → tabId for precise routing of codex-notify events.
+  const codexPendingTokensRef = useRef<Map<string, string>>(new Map())  // token → tabId
+  // Track codex tabs that are initializing (FIFO queue for session binding)
+  const codexInitializingTabsRef = useRef<string[]>([])
+  // Bidirectional worker binding: Codex Worker ↔ Droid Worker (by tabId/workerId)
+  const codexToDroidRef = useRef<Map<string, string>>(new Map())  // codexTabId → droidTabId
+  const droidToCodexRef = useRef<Map<string, string>>(new Map())  // droidTabId → codexTabId
 
   const supported = isFileSystemAccessSupported()
 
@@ -420,10 +77,18 @@ function App() {
   useEffect(() => {
     if (!tree?.nativePath) {
       setWorkerConfigs(DEFAULT_WORKER_CONFIGS)
+      setCodexConfigs(DEFAULT_CODEX_CONFIGS)
+      setConfirmationCardConfig(DEFAULT_CONFIRMATION_CARD_CONFIG)
       return
     }
     loadWorkerConfigs(tree.nativePath).then(configs => {
       setWorkerConfigs(configs)
+    })
+    loadCodexWorkerConfigs(tree.nativePath).then(configs => {
+      setCodexConfigs(configs)
+    })
+    loadConfirmationCardConfig(tree.nativePath).then(config => {
+      setConfirmationCardConfig(config)
     })
   }, [tree?.nativePath])
 
@@ -481,6 +146,7 @@ function App() {
         const tabId = `codex-resume-${session.sessionId.slice(0, 8)}-${Date.now()}`
         newCodexTabs.push({
           id: tabId,
+          mode: session.changeId ? 'code_review' : 'standalone',
           changeId: session.changeId || undefined,
           resumeSessionId: session.sessionId,
         })
@@ -573,12 +239,6 @@ function App() {
       return matched
     }
 
-    // Broadcast to all change + codex tabs
-    const broadcastToAll = (data: any, label: string) => {
-      safeDispatch(changeStopHookRefs.current, data, `${label}→change`)
-      safeDispatch(codexStopHookRefs.current, data, `${label}→codex`)
-    }
-
     window.__onHookNotify = (data: any) => {
       if (!data || typeof data !== 'object') {
         console.warn('[Hook] Received invalid hook data:', data)
@@ -598,43 +258,80 @@ function App() {
       // ── 2. Route event to the appropriate panel(s) ──
       switch (eventName) {
         case 'SessionStart':
-          // Droid session started — broadcast to all change tabs for init detection.
-          // Each DroidWorkerBase checks if it's waiting for init and captures session_id.
+          // Droid session started — broadcast to change tabs.
+          // Only the tab waiting for init (initializedRef=false) will accept it.
           safeDispatch(changeStopHookRefs.current, data, 'SessionStart→change')
           break
 
         case 'Stop': {
-          // Droid session stopped — contains last_result with the droid's response.
-          // Route by session_id if available; fallback to broadcast.
+          // Droid/Codex session stopped — prefer session routing; fallback to broadcast to both.
           if (hookSessionId) {
-            const matched = dispatchBySessionId(hookSessionId, data)
-            if (!matched) {
-              console.warn(`[Hook] Stop: session_id=${hookSessionId} did not match any tab, broadcasting to all`)
-              broadcastToAll(data, 'Stop(unmatched)')
+            if (!dispatchBySessionId(hookSessionId, data)) {
+              console.warn(`[Hook] Stop: session_id=${hookSessionId} did not match any tab, broadcasting to all tabs`)
+              safeDispatch(changeStopHookRefs.current, data, 'Stop(unmatched)→change')
+              safeDispatch(codexStopHookRefs.current, data, 'Stop(unmatched)→codex')
             }
           } else {
-            broadcastToAll(data, 'Stop(no-session)')
+            console.warn('[Hook] Stop: no session_id, broadcasting to all tabs')
+            safeDispatch(changeStopHookRefs.current, data, 'Stop(no-session)→change')
+            safeDispatch(codexStopHookRefs.current, data, 'Stop(no-session)→codex')
           }
           break
         }
 
-        case 'codex-notify':
-          // Codex hook — route to codex tabs.
-          // Always forward to codex tabs so they can capture session_id and
-          // detect completion. The panel handler decides what to do with it.
-          if (data.source === 'codex') {
-            safeDispatch(codexStopHookRefs.current, data, 'codex-notify→codex')
-          }
-          break
-
-        case 'SubagentStop':
-          // Subagent stopped — route by session_id or broadcast
+        case 'codex-notify': {
+          // Codex hook — route by session_id to the owning codex tab.
+          // If session_id doesn't match any tab (e.g. first ping response before
+          // session is bound), use pending_session_token for precise routing;
+          // fall back to FIFO only if token is missing.
           if (hookSessionId) {
             if (!dispatchBySessionId(hookSessionId, data)) {
-              broadcastToAll(data, 'SubagentStop(unmatched)')
+              // Unmatched session — try pending_session_token for precise routing
+              const pendingToken: string = (data.pending_session_token || '').trim()
+              const tokenMatchTabId = pendingToken ? codexPendingTokensRef.current.get(pendingToken) : undefined
+
+              if (tokenMatchTabId) {
+                const handler = codexStopHookRefs.current.get(tokenMatchTabId)
+                if (handler) {
+                  console.log(`[Hook] codex-notify(token-match) → tab ${tokenMatchTabId} via token ${pendingToken.slice(0, 16)}...`)
+                  try { handler(data) } catch (e) { console.error(`[Hook] Error in codex tab ${tokenMatchTabId}:`, e) }
+                }
+              } else {
+                // Fallback: FIFO — dispatch to the oldest initializing tab
+                const pending = codexInitializingTabsRef.current
+                if (pending.length > 0) {
+                  const initTabId = pending[0]
+                  const handler = codexStopHookRefs.current.get(initTabId)
+                  if (handler) {
+                    console.log(`[Hook] codex-notify(FIFO-fallback) → initializing tab ${initTabId} (${pending.length} pending)`)
+                    try { handler(data) } catch (e) { console.error(`[Hook] Error in codex tab ${initTabId}:`, e) }
+                  }
+                } else {
+                  console.warn('[Hook] codex-notify: unmatched session_id, no token match, and no initializing tabs')
+                }
+              }
             }
           } else {
-            broadcastToAll(data, 'SubagentStop(no-session)')
+            // No session_id — broadcast to codex tabs
+            if (data.source === 'codex') {
+              safeDispatch(codexStopHookRefs.current, data, 'codex-notify(no-session)→codex')
+            }
+          }
+          break
+        }
+
+        case 'SubagentStop':
+          // Subagent stopped — prefer session routing; fallback to broadcast.
+          if (hookSessionId) {
+            if (!dispatchBySessionId(hookSessionId, data)) {
+              console.warn(`[Hook] SubagentStop: session_id=${hookSessionId} did not match any tab, broadcasting`)
+              safeDispatch(changeStopHookRefs.current, data, 'SubagentStop(unmatched)→change')
+              safeDispatch(codexStopHookRefs.current, data, 'SubagentStop(unmatched)→codex')
+            }
+          } else {
+            console.warn('[Hook] SubagentStop: no session_id, broadcasting')
+            safeDispatch(changeStopHookRefs.current, data, 'SubagentStop(no-session)→change')
+            safeDispatch(codexStopHookRefs.current, data, 'SubagentStop(no-session)→codex')
           }
           break
 
@@ -706,7 +403,11 @@ function App() {
   }
 
   const handleCloseChangeTab = (tabId: string) => {
+    console.log(`[TabLifecycle] handleCloseChangeTab called for ${tabId}`)
     if (!window.confirm('Close this tab? Any unsaved progress will be lost.')) return
+    // Mark this tab as closing so cleanup effect knows to kill terminal
+    if (!window.__closingTabs) window.__closingTabs = new Set()
+    window.__closingTabs.add(tabId)
     const bridge = window.__nativeBridge
     if (bridge) {
       bridge.stopChangeTerminal(tabId)
@@ -716,9 +417,17 @@ function App() {
     setChangeTabs(remaining)
     changeStopHookRefs.current.delete(tabId)
     changeSessionIdRefs.current.delete(tabId)
+    changeSendMessageRefs.current.delete(tabId)
     setChangeSessionDisplays(prev => { const m = new Map(prev); m.delete(tabId); return m })
     setChangeResetKeys(prev => { const m = new Map(prev); m.delete(tabId); return m })
     setChangeBusyMap(prev => { const m = new Map(prev); m.delete(tabId); return m })
+    // Clean up worker binding
+    const boundCodexId = droidToCodexRef.current.get(tabId)
+    if (boundCodexId) {
+      codexToDroidRef.current.delete(boundCodexId)
+      droidToCodexRef.current.delete(tabId)
+      console.log(`[WorkerBinding] Removed binding for Droid ${tabId}`)
+    }
     if (remaining.length === 0) {
       setActiveChangeTabId(null)
       setActiveTab('viewer')
@@ -728,17 +437,30 @@ function App() {
   }
 
   const handleCloseCodex = (tabId: string) => {
+    console.log(`[TabLifecycle] handleCloseCodex called for ${tabId}`)
     if (!window.confirm('Close Codex Worker tab? Any unsaved progress will be lost.')) return
+    // Mark this tab as closing so cleanup effect knows to kill terminal
+    if (!window.__closingTabs) window.__closingTabs = new Set()
+    window.__closingTabs.add(tabId)
     const bridge = window.__nativeBridge
     if (bridge) {
-      bridge.stopReviewTerminal()
+      bridge.stopChangeTerminal(tabId)
       bridge.untrackCodexSession(tabId)
     }
     const remaining = codexTabs.filter(t => t.id !== tabId)
     setCodexTabs(remaining)
     codexStopHookRefs.current.delete(tabId)
     codexSessionIdRefs.current.delete(tabId)
+    // Remove from initializing queue if still pending
+    codexInitializingTabsRef.current = codexInitializingTabsRef.current.filter(t => t !== tabId)
     setCodexSessionDisplays(prev => { const m = new Map(prev); m.delete(tabId); return m })
+    // Clean up worker binding
+    const boundDroidId = codexToDroidRef.current.get(tabId)
+    if (boundDroidId) {
+      droidToCodexRef.current.delete(boundDroidId)
+      codexToDroidRef.current.delete(tabId)
+      console.log(`[WorkerBinding] Removed binding for Codex ${tabId}`)
+    }
     if (remaining.length === 0) {
       setActiveCodexTabId(null)
       setActiveTab('viewer')
@@ -748,25 +470,77 @@ function App() {
   }
 
   const handleCodexChange = (changeId: string) => {
-    // Create Codex Worker tab for this change
+    // Create Codex Worker tab for this change (review mode)
     const codexTabId = `codex-${changeId}-${Date.now()}`
-    setCodexTabs(prev => [...prev, { id: codexTabId, changeId }])
+    codexInitializingTabsRef.current = [...codexInitializingTabsRef.current, codexTabId]
+    setCodexTabs(prev => [...prev, { id: codexTabId, mode: 'code_review', changeId }])
     setActiveCodexTabId(codexTabId)
-    
-    // Create Droid Worker tab (no changeId = idle)
-    const changeTabId = `change-new-${Date.now()}`
-    setChangeTabs(prev => [...prev, { id: changeTabId, mode: 'new_change' }])
-    setChangeResetKeys(prev => new Map(prev).set(changeTabId, 0))
-    setActiveChangeTabId(changeTabId)
-    
+
+    // NOTE: Droid Worker is NOT created here.
+    // It will be auto-created on demand when user clicks "Droid Fix" (via handleDroidFixRequest).
+
     // Switch to Codex Worker tab
     setActiveTab('codex')
   }
 
+  const handleDroidFixRequest = useCallback((selectedItems: string[], codexWorkerId: string) => {
+    // Build fix message
+    let template = '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
+    for (const scenario of Object.values(confirmationCardConfig.scenarios)) {
+      const btn = scenario.buttons.find(b => b.target === 'droid_worker')
+      if (btn?.messageTemplate) {
+        template = btn.messageTemplate
+        break
+      }
+    }
+    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
+    const fixMessage = template.replace('{selected_items}', itemsText)
+
+    // Find bound Droid Worker by workerId
+    let droidWorkerId = codexToDroidRef.current.get(codexWorkerId)
+
+    if (!droidWorkerId) {
+      // No bound Droid Worker → create a fix_review mode Droid Worker
+      console.log(`[DroidFixRequest] Auto-creating fix_review Droid Worker for Codex ${codexWorkerId}`)
+      const newDroidTabId = `change-fix-${Date.now()}`
+      const codexTab = codexTabs.find(t => t.id === codexWorkerId)
+      const changeId = codexTab?.changeId
+      
+      const newTab = { id: newDroidTabId, mode: 'fix_review' as const, changeId }
+      setChangeTabs(prev => [...prev, newTab])
+      setChangeResetKeys(prev => new Map(prev).set(newDroidTabId, 0))
+      setChangeAutoSendMessages(prev => new Map(prev).set(newDroidTabId, fixMessage))
+      setActiveChangeTabId(newDroidTabId)
+      setActiveTab('change')
+
+      // Establish bidirectional binding
+      codexToDroidRef.current.set(codexWorkerId, newDroidTabId)
+      droidToCodexRef.current.set(newDroidTabId, codexWorkerId)
+      console.log(`[WorkerBinding] Codex ${codexWorkerId} ↔ Droid ${newDroidTabId} (auto-created)`)
+      return
+    }
+
+    // Get the send message function for the bound Droid Worker
+    const sendMessage = changeSendMessageRefs.current.get(droidWorkerId)
+    if (!sendMessage) {
+      console.warn(`[DroidFixRequest] No sendMessage function for Droid Worker ${droidWorkerId}`)
+      alert('Droid Worker 尚未就绪，请稍后重试')
+      return
+    }
+
+    // Switch to the Droid Worker tab and send
+    setActiveChangeTabId(droidWorkerId)
+    setActiveTab('change')
+    setTimeout(() => {
+      sendMessage(fixMessage)
+    }, 100)
+  }, [codexTabs, confirmationCardConfig])
+
   const handleNewCodex = () => {
     // Create standalone Codex Worker tab (no changeId)
     const codexTabId = `codex-new-${Date.now()}`
-    setCodexTabs(prev => [...prev, { id: codexTabId }])
+    codexInitializingTabsRef.current = [...codexInitializingTabsRef.current, codexTabId]
+    setCodexTabs(prev => [...prev, { id: codexTabId, mode: 'standalone' as const }])
     setActiveCodexTabId(codexTabId)
     setActiveTab('codex')
   }
@@ -906,11 +680,17 @@ function App() {
                 onSessionId={(id) => setChangeSessionDisplays(prev => new Map(prev).set(tab.id, id))}
                 onBusyChange={(busy) => setChangeBusyMap(prev => new Map(prev).set(tab.id, busy))}
                 onReviewAction={(changeId) => handleCodexChange(changeId)}
+                onSendMessageRef={{
+                  get current() { return changeSendMessageRefs.current.get(tab.id) || null },
+                  set current(value) { changeSendMessageRefs.current.set(tab.id, value) }
+                }}
+                autoSendMessage={changeAutoSendMessages.get(tab.id)}
+                confirmationCardConfig={confirmationCardConfig}
               />
             </div>
             <div className="split-right">
               <div className="split-right-header">Terminal</div>
-              <EmbeddedTerminal channel="change" tabId={tab.id} />
+              <EmbeddedTerminal channel="droid" tabId={tab.id} />
             </div>
           </div>
         ))}
@@ -919,11 +699,12 @@ function App() {
         {window.__isNativeApp && codexTabs.map(tab => (
           <div key={tab.id} className="split-layout" style={{ display: activeTab === 'codex' && activeCodexTabId === tab.id ? 'flex' : 'none' }}>
             <div className="split-left">
-              <CodexPanel
+              <CodexWorkerBase
                 tabId={tab.id}
                 changeId={tab.changeId}
                 resumeSessionId={tab.resumeSessionId}
                 projectPath={tree?.nativePath}
+                config={codexConfigs[tab.mode]}
                 onStopHookRef={{
                   get current() { return codexStopHookRefs.current.get(tab.id) || null },
                   set current(value) { codexStopHookRefs.current.set(tab.id, value) }
@@ -933,13 +714,34 @@ function App() {
                   get current() { return codexSessionIdRefs.current.get(tab.id) || null },
                   set current(value) { codexSessionIdRefs.current.set(tab.id, value) }
                 }}
-                onSessionId={(id) => setCodexSessionDisplays(prev => new Map(prev).set(tab.id, id))}
+                onSessionId={(id) => {
+                  setCodexSessionDisplays(prev => new Map(prev).set(tab.id, id))
+                  // Remove this tab from the initializing queue now that its session is bound
+                  codexInitializingTabsRef.current = codexInitializingTabsRef.current.filter(t => t !== tab.id)
+                }}
                 onBusyChange={(busy) => setCodexBusyMap(prev => new Map(prev).set(tab.id, busy))}
+                onDroidFixRequest={handleDroidFixRequest}
+                confirmationCardConfig={confirmationCardConfig}
+                onInitComplete={() => {
+                  // Dequeue from initializing list when init completes (success or timeout)
+                  codexInitializingTabsRef.current = codexInitializingTabsRef.current.filter(t => t !== tab.id)
+                }}
+                onPendingToken={(token) => {
+                  if (token) {
+                    // Register token → tabId for precise routing
+                    codexPendingTokensRef.current.set(token, tab.id)
+                  } else {
+                    // Clear: remove any token pointing to this tab
+                    codexPendingTokensRef.current.forEach((tid, tk) => {
+                      if (tid === tab.id) codexPendingTokensRef.current.delete(tk)
+                    })
+                  }
+                }}
               />
             </div>
             <div className="split-right">
               <div className="split-right-header">Terminal</div>
-              <EmbeddedTerminal channel="review" />
+              <EmbeddedTerminal channel="codex" tabId={tab.id} />
             </div>
           </div>
         ))}

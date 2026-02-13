@@ -120,12 +120,15 @@ if isinstance(payload, dict):
             session_id = value.strip()
             break
 
+pending_token = os.environ.get("OPENSPEC_PENDING_TOKEN", "").strip()
+
 envelope = {
     "event": "codex-notify",
     "codex_event_type": event_type,
     "codex_is_done": bool(is_done),
     "source": "codex",
     "session_id": session_id,
+    "pending_session_token": pending_token,
     "payload": payload,
 }
 
