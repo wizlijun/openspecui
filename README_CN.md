@@ -1,319 +1,264 @@
-# 🚀 OpenSpecUI
+# 🔥 OpenSpecUI
 
-**一个狂野的、规格驱动的开发环境，让 AI 智能体在你的终端中活起来。**
+> **"编程的未来不是写代码，而是指挥一支 AI 军团替你写。"**
 
-OpenSpecUI 是一个原生 macOS 桌面应用，融合了基于 Web 的 UI 和真实的终端能力，为 AI 驱动的软件开发创造了一个交互式游乐场。专为想要驾驭 AI 智能体原始能量，同时保持对工作流程完全控制的开发者而构建。
-
----
-
-## ⚡ 狂野之处
-
-- **双智能体架构**：同时运行 Droid Workers（任务执行）和 Codex Workers（代码审查），每个都在独立的终端会话中
-- **真实 PTY 集成**：不是假终端——通过 Python 的 `pty` 模块管理的真实 `zsh` 进程，具备完整的 shell 能力
-- **人机协同确认**：AI 智能体可以暂停并通过交互式复选框卡片请求你的批准后再继续
-- **实时 Hook 系统**：Factory droid hooks 在智能体创建或修改文件时自动刷新文件树——无需手动刷新
-- **规格驱动工作流**：按照 OpenSpec 方法论将工作组织为 changes、proposals、specs 和 tasks
-- **多标签会话**：打开多个智能体会话，恢复之前的对话，在上下文之间无缝切换
-- **实时日志面板**：在实时消息日志中观察每个命令、回调和 hook 触发——完美的智能体行为调试工具
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![macOS](https://img.shields.io/badge/platform-macOS-blue.svg)](https://www.apple.com/macos/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev)
+[![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB.svg)](https://python.org)
 
 ---
 
-## 🎯 核心功能
+## 💀 这到底是什么鬼？
 
-### 🤖 Droid Workers
-在你的项目中执行任务的 AI 智能体：
-- **New Change**：从头开始一个新功能或修复
-- **Continue Change**：继续现有 change 的工作
-- **Fix Review**：处理审查反馈并迭代
+OpenSpecUI 是一个 **疯狂的** macOS 原生桌面应用，它把 AI 智能体扔进真实的终端会话里，让它们在你的代码库里疯狂输出——而 **你** 握着缰绳。
 
-### 🔍 Codex Workers
-专门从事代码审查的 AI 智能体：
-- **Standalone Review**：独立的代码分析
-- **Code Review**：与 Droid Workers 双向通信的集成审查工作流
+没有沙盒。没有玩具终端。没有花架子。
 
-### 🎨 交互式 UI
-- **文件树浏览器**：浏览你的 OpenSpec changes、specs 和 artifacts
-- **Canvas 查看器**：渲染带语法高亮的 Markdown specs
-- **嵌入式终端**：具有真实 shell 访问权限的完整 xterm.js 终端
-- **确认卡片**：用于智能体-人类交互的动态 UI，带复选框列表
+真实的 `zsh`。真实的 PTY。真实的 AI 智能体。真实的混沌。
 
-### 🔧 开发者体验
-- **配置驱动**：基于 YAML 的 worker 定义，支持自定义提示词、快捷按钮和确认模板
-- **会话持久化**：在中断的地方精确恢复智能体会话
-- **输入历史**：使用方向键浏览命令历史
-- **自动滚动日志**：实时消息记录，支持过滤和搜索
+你打一句话，AI 智能体写代码、审代码、修代码，甚至互相争论代码该怎么写。你靠在椅子上，喝着咖啡，一键批准或驳回它们的工作。
+
+**这不是 IDE 插件。这是一个作战指挥中心。**
 
 ---
 
-## 🏗️ 架构
+## 🤯 为什么你应该在意？
+
+| 传统开发 | 用 OpenSpecUI |
+|---|---|
+| 你写代码 | AI 写代码，你审批 |
+| 你审 PR | AI 审 PR，你确认 |
+| 你修 bug | AI 修 bug，先问你修哪个 |
+| 你来回切换上下文 | 多个 AI 智能体在并行标签中工作 |
+| 你等待 | 智能体干活的时候你想下一步 |
+
+---
+
+## ⚡ 让你炸裂的功能
+
+### 🤖 双智能体对战
+同时运行 **Droid Workers**（建造者）和 **Codex Workers**（审查者）。它们甚至可以互相对话。一个建，一个审。你扮演上帝。
+
+### 💻 真终端，不是玩具
+每个智能体都通过 Python 的 `pty` 模块获得一个真实的 `zsh` shell。完整 ANSI 支持。完整 shell 能力。前端用 `xterm.js`。货真价实。
+
+### ✋ 人机协同确认
+智能体返回一个清单？一张漂亮的确认卡片弹出来。勾选你想要的。点确认。智能体服从。你是老板。
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  macOS 桌面应用 (Python + PyObjC)                           │
-│  ┌─────────────────────┐  ┌──────────────────────────────┐ │
-│  │  Web 应用 (React)   │  │  终端 (xterm.js + PTY)       │ │
-│  │  - 文件树           │  │  - 真实 zsh shells           │ │
-│  │  - Canvas 查看器    │  │  - 多通道                    │ │
-│  │  │  - Droid Workers │  │  │  - main, review, droid,  │ │
-│  │  │  - Codex Workers │  │  │    codex (每个标签)      │ │
-│  │  - 确认 UI          │  │  - WebSocket 桥接            │ │
-│  └─────────────────────┘  └──────────────────────────────┘ │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  消息日志面板                                        │  │
-│  │  → SEND  ← RECV  ⟲ CALLBACK  ⚡ HOOK  ℹ INFO        │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-         ↕ HTTP 服务器 (端口 18888)
-┌─────────────────────────────────────────────────────────────┐
-│  Factory Droid Hooks                                        │
-│  - SessionEnd → curl POST /api/hook-notify                  │
-│  - PostToolUse → curl POST /api/hook-notify                 │
-└─────────────────────────────────────────────────────────────┘
+智能体："发现 3 个问题，选择要修复哪些："
+  ☐ P0: auth 模块的严重类型错误
+  ☐ P1: WebSocket 处理器的内存泄漏
+  ☐ P2: Dashboard 缺少错误边界
+
+你：*勾选 P0 和 P1，点确认*
+
+智能体："收到。" *开始修复*
 ```
 
-**技术栈：**
-- **前端**：React 19 + TypeScript + Vite
-- **终端**：xterm.js + node-pty
-- **桌面**：Python 3.14 + PyObjC (Cocoa/WebKit)
-- **配置**：YAML (js-yaml)
-- **通信**：WebSocket + HTTP
+### 🔄 实时 Hook 系统
+Factory droid hooks 向你的应用发送 HTTP 回调。文件树自动刷新。你永远不用手动刷新。永远。
+
+### 📋 规格驱动的混沌
+组织你的疯狂：**Changes → Proposals → Specs → Tasks**。给混沌一个结构。更快交付。
+
+### 🗂️ 多标签混战
+开 5 个智能体。每个在自己的标签页。每个有自己的终端。每个干不同的事。随时恢复任何会话。
+
+### 📊 实时作战室
+一个实时日志面板展示每个命令、每个响应、每个回调、每个 hook 触发。颜色编码。精确到毫秒。像疯子一样调试。
 
 ---
 
-## 🚀 快速开始
+## 🏗️ 架构 — 引擎盖下的猛兽
 
-### 前置要求
-- macOS（在 macOS 15.2+ 上测试）
-- Python 3.14+
-- Node.js 18+
-- 支持 droid 的 Factory CLI
-
-### 安装
-
-1. **克隆仓库**
-   ```bash
-   git clone https://github.com/wizlijun/openspecui.git
-   cd openspecui
-   ```
-
-2. **设置 Web 应用**
-   ```bash
-   cd app
-   npm install
-   npm run build
-   ```
-
-3. **设置桌面应用**
-   ```bash
-   cd ../desktop
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install pyobjc-framework-Cocoa pyobjc-framework-WebKit
-   ```
-
-4. **启动**
-   ```bash
-   python app.py
-   ```
-
-应用将打开：
-- 左侧面板：用于浏览 specs 和管理智能体的 Web UI
-- 右侧面板：带有你的 shell 的终端
-- 底部面板：实时消息日志
-
----
-
-## 📖 使用方法
-
-### 打开项目
-1. 点击左上角的文件夹图标
-2. 选择你的项目目录（必须包含 `.openspec/` 文件夹）
-3. 文件树将填充你的 changes 和 specs
-
-### 启动 Droid Worker
-1. 点击 **"+ New Change"** 按钮
-2. 选择模式（New Change、Continue Change、Fix Review）
-3. 智能体在专用终端标签中启动
-4. 输入你的请求并按 Enter
-
-### 启动 Codex Worker
-1. 点击 **"+ Code Review"** 按钮
-2. 选择模式（Standalone、Code Review）
-3. 审查智能体在单独的终端中启动
-4. 可选地将其链接到 Droid Worker 以进行双向通信
-
-### 人工确认流程
-当智能体返回带有复选框的消息时：
-```markdown
-请选择要执行的任务：
-- [ ] 修复类型错误
-- [ ] 更新文档
-- [ ] 添加单元测试
+```
+┌──────────────────────────────────────────────────────────┐
+│  macOS 原生应用 (Python + PyObjC)                        │
+│                                                          │
+│  ┌────────────────────┐  ┌────────────────────────────┐  │
+│  │  🌐 Web UI (React) │  │  💻 终端 (xterm.js)        │  │
+│  │                    │  │                            │  │
+│  │  文件树            │  │  zsh ──── Droid 智能体 #1  │  │
+│  │  Spec 查看器       │  │  zsh ──── Droid 智能体 #2  │  │
+│  │  Worker 控制台     │  │  zsh ──── Codex 智能体 #1  │  │
+│  │  确认 UI           │  │  zsh ──── 主 Shell         │  │
+│  └────────────────────┘  └────────────────────────────┘  │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  📊 实时作战室（消息日志）                          │  │
+│  │  → SEND  ← RECV  ⟲ CALLBACK  ⚡ HOOK  ℹ INFO      │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+         ↕ HTTP :18888
+┌──────────────────────────────────────────────────────────┐
+│  🔗 Factory Droid Hooks (SessionEnd / PostToolUse)       │
+└──────────────────────────────────────────────────────────┘
 ```
 
-确认卡片会自动出现。勾选你想要的项目，点击 **确认**，智能体就会收到你的选择。
-
-### 恢复会话
-- 点击任何 worker 标签上的 **"Resume"** 按钮
-- 从下拉列表中选择之前的会话
-- 智能体重新加载完整的对话历史
+**技术栈 — 毫不妥协：**
+- **前端**：React 19 + TypeScript + Vite 7
+- **终端**：xterm.js + node-pty（真 PTY，不是闹着玩的）
+- **桌面**：Python 3.14 + PyObjC（Cocoa/WebKit 原生）
+- **配置**：YAML 驱动一切
+- **通信**：WebSocket + HTTP hooks
 
 ---
 
-## ⚙️ 配置
+## 🚀 60 秒启动
 
-### Worker 定义
+```bash
+# 克隆这头猛兽
+git clone https://github.com/wizlijun/openspecui.git
+cd openspecui
 
-创建 `.openspec/droid_worker_define.yml`：
+# 构建 Web 应用
+cd app && npm install && npm run build && cd ..
+
+# 设置桌面应用
+cd desktop
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pyobjc-framework-Cocoa pyobjc-framework-WebKit
+
+# 释放
+python app.py
+```
+
+搞定。你进来了。
+
+- **左侧**：Web UI — 浏览 specs，控制智能体
+- **右侧**：终端 — 真实 shell，真实力量
+- **底部**：作战室 — 实时看到一切
+
+---
+
+## 🎮 怎么用这玩意
+
+### 1. 打开你的项目
+点文件夹图标 → 选你的项目（需要 `openspec/` 目录）→ 文件树加载。
+
+### 2. 召唤 Droid
+点 **"+ New Change"** → 选模式 → 智能体在新终端标签中生成 → 告诉它你要造什么。
+
+### 3. 召唤审查者
+点 **"+ Code Review"** → Codex 智能体启动 → 链接到 Droid → 它们自动协调。
+
+### 4. 批准或驳回
+智能体给你一个清单 → 确认卡片弹出 → 勾选你要的 → 点确认 → 智能体执行。
+
+### 5. 随时恢复
+关了标签？没事。点 **Resume** → 选一个会话 → 完整对话历史重新加载。
+
+---
+
+## ⚙️ 配置你的智能体
+
+### Droid Worker — `.openspec/droid_worker_define.yml`
 ```yaml
 modes:
   new_change:
     name: "New Change"
-    autoInitPrompt: "你正在帮助创建一个新的 change。询问用户想要构建什么。"
+    autoInitPrompt: "你是一台编码机器。问用户要造什么。"
     quickButtons:
-      - label: "创建提案"
+      - label: "🚀 创建提案"
         prompt: "/opsx-new {input}"
         requiresInput: true
-      - label: "列出 Changes"
+      - label: "📋 列出 Changes"
         action: "list_changes"
     confirmation:
       enabled: true
       responseTemplate: "已确认：\n{selected_items}"
 ```
 
-创建 `.openspec/codex_worker_define.yml`：
+### Codex Worker — `.openspec/codex_worker_define.yml`
 ```yaml
 modes:
   code_review:
     name: "Code Review"
-    autoInitPrompt: "你是一个代码审查员。分析代码并提供反馈。"
+    autoInitPrompt: "你是一个无情的代码审查员。找出每一个缺陷。"
     quickButtons:
-      - label: "开始审查"
+      - label: "🔍 开始审查"
         prompt: "审查当前 change"
 ```
 
-### 确认卡片场景
-
-创建 `.openspec/confirmation_card.yml`：
+### 确认卡片 — `.openspec/confirmation_card.yml`
 ```yaml
 scenarios:
   - name: "task_selection"
     trigger:
       pattern: "请选择|Please select|Choose"
     buttons:
-      - label: "确认选择"
+      - label: "✅ 确认"
         action: "send_selected"
         template: "已确认：\n{selected_items}"
-      - label: "全部执行"
+      - label: "🔥 全部执行"
         action: "send_all"
-        template: "执行全部任务"
-      - label: "取消"
+      - label: "❌ 取消"
         action: "cancel"
 ```
 
 ---
 
-## 🔥 高级功能
-
-### Factory Hooks 集成
-应用自动监听 `http://127.0.0.1:18888` 上的 Factory droid hooks。在 `.factory/settings.json` 中配置：
-```json
-{
-  "hooks": {
-    "PostToolUse": [{
-      "matcher": "*",
-      "hooks": [{
-        "type": "command",
-        "command": "curl -X POST http://127.0.0.1:18888/api/hook-notify -H 'Content-Type: application/json' -d '{\"event\":\"PostToolUse\"}' 2>/dev/null || true"
-      }]
-    }]
-  }
-}
-```
-
-### 消息日志面板
-- **自动滚动**：切换以跟随新消息
-- **清除**：清空日志（最多保留 2000 条）
-- **过滤器**：按消息类型（SEND、RECV、CALLBACK、HOOK）进行颜色编码
-
-### 双向 Worker 通信
-将 Codex Worker 链接到 Droid Worker：
-1. 启动 Droid Worker
-2. 在 "Code Review" 模式下启动 Codex Worker
-3. Codex Worker 可以向 Droid Worker 的终端发送命令
-4. 两个智能体可以在同一个 change 上协调
-
----
-
 ## 🛠️ 开发
 
-### 在开发模式下运行
 ```bash
-# 终端 1：带热重载的 Web 应用
-cd app
-npm run dev
+# 热重载 Web 应用
+cd app && npm run dev
 
-# 终端 2：桌面应用
-cd desktop
-source .venv/bin/activate
-python app.py
+# 桌面应用（另一个终端）
+cd desktop && source .venv/bin/activate && python app.py
 ```
 
-### 项目结构
+### 项目地图
 ```
 openspecui/
-├── app/                    # React web 应用
-│   ├── src/
-│   │   ├── App.tsx         # 主应用组件
-│   │   ├── DroidWorkerBase.tsx
-│   │   ├── CodexWorkerBase.tsx
-│   │   ├── HumanConfirmationCard.tsx
-│   │   ├── EmbeddedTerminal.tsx
-│   │   └── TreeView.tsx
-│   └── package.json
-├── desktop/                # macOS 原生应用
-│   ├── app.py              # 主 Python 应用
-│   ├── log_panel.html      # 消息日志 UI
+├── app/                    # React 前端
+│   └── src/
+│       ├── App.tsx                    # 指挥中心
+│       ├── DroidWorkerBase.tsx        # Droid 智能体 UI
+│       ├── CodexWorkerBase.tsx        # Codex 智能体 UI
+│       ├── HumanConfirmationCard.tsx  # 人机协同
+│       ├── EmbeddedTerminal.tsx       # xterm.js 封装
+│       └── TreeView.tsx               # 文件树
+├── desktop/                # macOS 原生外壳
+│   ├── app.py              # 2000+ 行纯粹的力量
+│   ├── log_panel.html      # 作战室 UI
 │   └── confirmation_dialog.html
-├── openspec/               # OpenSpec 工作区
-│   ├── changes/            # 活动 changes
-│   ├── specs/              # 主 specs
-│   └── config.yaml
-└── README.md
+├── openspec/               # 你的工作区
+│   ├── changes/
+│   └── specs/
+├── README.md
+└── README_CN.md
 ```
 
 ---
 
 ## 🎭 理念
 
-OpenSpecUI 拥抱 AI 驱动开发的混沌，同时让你掌控缰绳。它不是要取代开发者——而是要放大你以思维速度思考、设计和构建的能力。
+大多数 AI 编程工具把你当乘客。OpenSpecUI 把你当 **将军**。
 
-**规格驱动**意味着在深入代码之前定义"是什么"和"为什么"。**AI 驱动**意味着智能体处理繁重的工作。**人机协同**意味着你保持控制。
+你制定战略。AI 智能体执行战术。当它们需要决策时，来找你。当它们完成时，向你汇报。你批准、驳回或重新指挥。
 
-这就是软件开发，未经驯服。
+**规格驱动** = 写代码之前先想清楚。  
+**AI 驱动** = 让机器干重活。  
+**人机协同** = 最终决定权永远在你手里。
+
+这不是要取代开发者。这是要给开发者 **超能力**。
 
 ---
 
 ## 📜 许可证
 
-MIT
+MIT — 想怎么用就怎么用。
 
 ---
 
 ## 🤝 贡献
 
-欢迎贡献！这个项目是实验性的，正在快速发展。如果你想添加功能、修复 bug 或改进文档，请提交 issue 或 PR。
+这个项目是实验性的、不断进化的、还有点疯狂。非常适合喜欢在刀尖上跳舞的贡献者。欢迎 PR 和 issue。
 
 ---
 
-## 🙏 致谢
-
-构建使用：
-- [Factory AI](https://factory.ai) - AI 智能体基础设施
-- [xterm.js](https://xtermjs.org) - 终端模拟
-- [React](https://react.dev) - UI 框架
-- [PyObjC](https://pyobjc.readthedocs.io) - macOS 原生绑定
-
----
-
-**准备好在你的终端中释放 AI 智能体了吗？克隆、构建，让混沌开始。** 🔥
+**别再像 2015 年那样写代码了。指挥你的 AI 军团。以思维的速度交付。** 🔥🔥🔥
