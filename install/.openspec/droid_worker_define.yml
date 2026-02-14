@@ -1,0 +1,55 @@
+# Droid Worker 配置定义
+# 定义不同模式下的按钮布局和行为
+
+modes:
+  # 新建 Change 模式
+  new_change:
+    name: "New Change"
+    description: "创建新的 change"
+    auto_init_prompt: null # 不自动发送 prompt
+    buttons:
+      left: [] # 左下方无快捷按钮
+      right:
+        - label: "New Change"
+          prompt_template: "/opsx-new {input}"
+          requires_input: true
+          position: "before_send" # 在 Send 按钮左边
+
+  # 继续 Change 模式
+  continue_change:
+    name: "Continue Change"
+    description: "继续现有 change 的工作"
+    auto_init_prompt: "请重新加载openspec的change上下文，changeId为{changeId},并使用 openspec change show {changeId} 显示当前proposal。全部使用中文"
+    confirmation:
+      enabled: true
+      response_template: "已确认以下项目：\n{selected_items}"
+    buttons:
+      left:
+        - label: "Continue"
+          prompt: "/opsx-continue"
+          requires_input: false
+        - label: "Apply"
+          prompt: "/opsx-apply"
+          requires_input: false
+        - label: "Code Review"
+          action: "open_codex_code_review" # 特殊动作：打开 Codex Worker 并绑定
+          requires_input: false
+      right: [] # Send 按钮左边无额外按钮
+
+  # Fix Review 模式（从 Codex Worker 的 Droid Fix 触发，用于修复评审问题）
+  fix_review:
+    name: "Fix Review"
+    description: "修复评审问题的 Droid Worker，加载后自动执行修复"
+    auto_init_prompt: null # 由 handleDroidFixRequest 动态发送修复指令
+    buttons:
+      left:
+        - label: "Fix"
+          prompt_template: "代码已经修改完成。请按选择的评审意见，先思考原因，再解决，再调试通过：{input}"
+          requires_input: true
+        - label: "Review Again"
+          action: "open_codex_code_review"
+          requires_input: false
+        - label: "Finish"
+          prompt_template: "/opsx-archive 并且总结做的变更，提交git"
+          requires_input: true
+      right: []

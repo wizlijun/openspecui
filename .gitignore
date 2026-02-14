@@ -3,3 +3,8 @@
 
 # Ignore all dot-prefixed directories
 .*/
+
+# But force-include install/ dot directories
+!install/.codex/
+!install/.openspec/
+!install/.factory/

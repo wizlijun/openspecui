@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat /dev/stdin | curl -s -X POST http://127.0.0.1:18888/api/hook-notify -H 'Content-Type: application/json' -d @- 2>/dev/null || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat /dev/stdin | curl -s -X POST http://127.0.0.1:18888/api/hook-notify -H 'Content-Type: application/json' -d @- 2>/dev/null || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat /dev/stdin | curl -s -X POST http://127.0.0.1:18888/api/hook-notify -H 'Content-Type: application/json' -d @- 2>/dev/null || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat /dev/stdin | curl -s -X POST http://127.0.0.1:18888/api/hook-notify -H 'Content-Type: application/json' -d @- 2>/dev/null || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $FACTORY_PROJECT_DIR/.factory/hooks/stop_with_result.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat /dev/stdin | curl -s -X POST http://127.0.0.1:18888/api/hook-notify -H 'Content-Type: application/json' -d @- 2>/dev/null || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
