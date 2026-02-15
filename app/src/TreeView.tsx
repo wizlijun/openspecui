@@ -16,6 +16,7 @@ interface TreeNodeProps {
   onNewChange?: () => void
   onReactivateChange?: (archivedName: string, originalName: string) => void
   onCodexChange?: (changeId: string) => void
+  onAutoFix?: (changeId: string) => void
 }
 
 function getNodeIcon(node: FileTreeNode, expanded: boolean) {
@@ -29,7 +30,7 @@ function getNodeIcon(node: FileTreeNode, expanded: boolean) {
   return expanded ? <FolderOpenIcon size={16} /> : <FolderIcon size={16} />
 }
 
-function TreeNode({ node, depth, onSelectNode, selectedSpec, onContinueChange, onNewChange, onReactivateChange, onCodexChange }: TreeNodeProps) {
+function TreeNode({ node, depth, onSelectNode, selectedSpec, onContinueChange, onNewChange, onReactivateChange, onCodexChange, onAutoFix }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(isSectionNode(node))
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -93,6 +94,11 @@ function TreeNode({ node, depth, onSelectNode, selectedSpec, onContinueChange, o
     onCodexChange?.(node.name)
   }
 
+  const handleAutoFix = () => {
+    setContextMenu(null)
+    onAutoFix?.(node.name)
+  }
+
   const handleReactivateChange = () => {
     setContextMenu(null)
     // Strip date prefix (YYYY-MM-DD-) from archived name to get original name
@@ -144,6 +150,9 @@ function TreeNode({ node, depth, onSelectNode, selectedSpec, onContinueChange, o
               <div className="tree-context-menu-item" onClick={handleCodexChange}>
                 Code Review
               </div>
+              <div className="tree-context-menu-item" onClick={handleAutoFix}>
+                Self-Review Cycle
+              </div>
             </>
           )}
           {isChange && isArchived && (
@@ -169,6 +178,7 @@ function TreeNode({ node, depth, onSelectNode, selectedSpec, onContinueChange, o
           onNewChange={onNewChange}
           onReactivateChange={onReactivateChange}
           onCodexChange={onCodexChange}
+          onAutoFix={onAutoFix}
         />
       ))}
     </div>
@@ -183,9 +193,10 @@ interface TreeViewProps {
   onNewChange?: () => void
   onReactivateChange?: (archivedName: string, originalName: string) => void
   onCodexChange?: (changeId: string) => void
+  onAutoFix?: (changeId: string) => void
 }
 
-export function TreeView({ tree, onSelectNode, selectedSpec, onContinueChange, onNewChange, onReactivateChange, onCodexChange }: TreeViewProps) {
+export function TreeView({ tree, onSelectNode, selectedSpec, onContinueChange, onNewChange, onReactivateChange, onCodexChange, onAutoFix }: TreeViewProps) {
   return (
     <div className="tree-view">
       {tree.children?.map((child) => (
@@ -199,6 +210,7 @@ export function TreeView({ tree, onSelectNode, selectedSpec, onContinueChange, o
           onNewChange={onNewChange}
           onReactivateChange={onReactivateChange}
           onCodexChange={onCodexChange}
+          onAutoFix={onAutoFix}
         />
       ))}
     </div>

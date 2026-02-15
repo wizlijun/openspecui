@@ -46,3 +46,23 @@ export function parseCheckboxItems(text: string, triggerToSkip?: string): { item
 
   return { items, contextLines }
 }
+
+/**
+ * Filter checkbox items to only include P0 and P1 priority items.
+ * Strips common Markdown wrappers (bold, italic, brackets) before matching
+ * so that formats like **P0**, [P1], *P0* are correctly identified.
+ */
+export function filterP0P1Items(items: CheckboxItem[]): CheckboxItem[] {
+  return items.filter(item => {
+    // Strip common Markdown formatting: **bold**, *italic*, __underline__, [brackets]
+    const stripped = item.text.trim().replace(/^[\s*_[\]]+/, '').toUpperCase()
+    return /\bP[01]\b/.test(stripped)
+  })
+}
+
+/**
+ * Check if a list of checkbox items contains any unchecked P0 or P1 items.
+ */
+export function hasP0P1Items(items: CheckboxItem[]): boolean {
+  return filterP0P1Items(items.filter(item => !item.checked)).length > 0
+}

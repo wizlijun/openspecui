@@ -2,10 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { saveHistoryEntry } from './inputHistoryService'
 import { MarkdownWithCheckbox } from './MarkdownWithCheckbox'
 import { HumanConfirmationCard } from './HumanConfirmationCard'
-import { DEFAULT_CODEX_CONFIGS } from './loadCodexWorkerConfig'
 import type { ConfirmationCardConfig, ConfirmationButton, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
-import { parseCheckboxItems } from './checkboxUtils'
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -33,9 +31,6 @@ export interface CodexWorkerConfig {
   /** Human confirmation card config */
   confirmation?: ConfirmationConfig
 }
-
-// Re-export for backward compatibility
-export { DEFAULT_CODEX_CONFIGS }
 
 // ─── Helper functions ──────────────────────────────────────────────
 
@@ -100,57 +95,6 @@ const extractCodexFinalMessage = (data: any): string | null => {
   return null
 }
 
-// ─── Celebration Effect (Confetti) ─────────────────────────────────
-
-function triggerCelebration() {
-  const colors = ['#ff0', '#f0f', '#0ff', '#f00', '#0f0', '#00f', '#ff8800', '#ff0088']
-  const container = document.createElement('div')
-  container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:99999;overflow:hidden'
-  document.body.appendChild(container)
-
-  for (let i = 0; i < 150; i++) {
-    const confetti = document.createElement('div')
-    const size = Math.random() * 10 + 5
-    const color = colors[Math.floor(Math.random() * colors.length)]
-    const left = Math.random() * 100
-    const delay = Math.random() * 2
-    const duration = Math.random() * 2 + 2
-    const rotation = Math.random() * 360
-
-    confetti.style.cssText = `
-      position:absolute;
-      left:${left}%;
-      top:-20px;
-      width:${size}px;
-      height:${size * 0.6}px;
-      background:${color};
-      border-radius:2px;
-      opacity:0.9;
-      transform:rotate(${rotation}deg);
-      animation:confetti-fall ${duration}s ease-in ${delay}s forwards;
-    `
-    container.appendChild(confetti)
-  }
-
-  // Inject keyframes if not already present
-  if (!document.getElementById('confetti-keyframes')) {
-    const style = document.createElement('style')
-    style.id = 'confetti-keyframes'
-    style.textContent = `
-      @keyframes confetti-fall {
-        0% { top: -20px; opacity: 1; transform: rotate(0deg) translateX(0); }
-        25% { opacity: 1; transform: rotate(180deg) translateX(${Math.random() > 0.5 ? '' : '-'}30px); }
-        50% { opacity: 0.8; transform: rotate(360deg) translateX(${Math.random() > 0.5 ? '-' : ''}20px); }
-        100% { top: 110vh; opacity: 0; transform: rotate(720deg) translateX(${Math.random() > 0.5 ? '' : '-'}40px); }
-      }
-    `
-    document.head.appendChild(style)
-  }
-
-  // Clean up after animation
-  setTimeout(() => container.remove(), 5000)
-}
-
 // ─── Props ─────────────────────────────────────────────────────────
 
 export interface CodexWorkerBaseProps {
@@ -166,12 +110,34 @@ export interface CodexWorkerBaseProps {
   onBusyChange?: (busy: boolean) => void
   /** Called when user clicks "Droid Fix" in confirmation card — sends selected items to bound Droid Worker */
   onDroidFixRequest?: (selectedItems: string[], codexWorkerId: string) => void
+  /** Called when user clicks "Auto Fix" in confirmation card — starts Codex↔Droid auto-fix loop */
+  onAutoFixStart?: (selectedItems: string[], codexWorkerId: string) => void
   /** Confirmation card config loaded from .openspec/confirmation_card.yml */
   confirmationCardConfig?: ConfirmationCardConfig
   /** Called when initialization completes (success or timeout) to dequeue from initializing list */
   onInitComplete?: () => void
   /** Register a pending session token for precise routing. Called with (token, tabId) on init, (null, tabId) on bind/cleanup. */
   onPendingToken?: (token: string | null) => void
+  /** Ref for external trigger to re-review after Droid fix completes (used by App for Auto Fix loop) */
+  onTriggerReReviewRef?: React.MutableRefObject<(() => void) | null>
+  /** Ref for external injection of status messages into Codex history (used by App for Auto Fix status) */
+  onPushHistoryRef?: React.MutableRefObject<((msg: string) => void) | null>
+  /** Ref for external dismissal of confirmation card (used by Auto Fix window) */
+  onDismissConfirmationRef?: React.MutableRefObject<(() => void) | null>
+  /** Ref for external message sending (used by Self-Review Cycle window) */
+  onSendMessageRef?: React.MutableRefObject<((message: string) => boolean) | null>
+  /** Called when Auto Fix review completes — passes review result text to App for P0/P1 analysis */
+  onAutoFixReviewComplete?: (resultText: string, codexWorkerId: string) => void
+  /** Whether this Codex Worker is in Auto Fix mode (controlled by App) */
+  autoFixActive?: boolean
+  /** Current Auto Fix stage (controlled by App) */
+  autoFixStage?: 'fixing' | 'reviewing' | null
+  /** Called when user clicks "停止 Auto Fix" button */
+  onAutoFixStop?: (codexWorkerId: string) => void
+  /** Auto-initialize without user clicking the Init button (used by Self-Review Cycle) */
+  autoInit?: boolean
+  /** Suppress auto-sending config.autoInitPrompt after init (used by Self-Review Cycle which sends its own prompt) */
+  suppressAutoInitPrompt?: boolean
 }
 
 // ─── Component ─────────────────────────────────────────────────────
@@ -179,25 +145,46 @@ export interface CodexWorkerBaseProps {
 export function CodexWorkerBase({
   tabId, changeId, resumeSessionId, projectPath, config,
   onStopHookRef, onRefresh, sessionIdRef, onSessionId, onBusyChange,
-  onDroidFixRequest, confirmationCardConfig, onInitComplete, onPendingToken,
+  onDroidFixRequest, onAutoFixStart, confirmationCardConfig, onInitComplete, onPendingToken,
+  onTriggerReReviewRef, onPushHistoryRef, onDismissConfirmationRef, onSendMessageRef, onAutoFixReviewComplete, autoFixActive, autoFixStage, onAutoFixStop,
+  autoInit, suppressAutoInitPrompt,
 }: CodexWorkerBaseProps) {
+  // ─── HMR State Persistence ─────────────────────────────────────────
+  // Store worker state in window to survive HMR unmount/remount
+  if (!window.__workerStates) window.__workerStates = {}
+  const savedState = window.__workerStates[tabId]
+  
   const [message, setMessage] = useState('')
-  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
-  const [waiting, setWaiting] = useState(false)
-  const [stopped, setStopped] = useState(false)
-  const [initialized, setInitialized] = useState(false)
-  const [showInitButton, setShowInitButton] = useState(true)
+  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>(
+    savedState?.history || []
+  )
+  const [waiting, setWaiting] = useState(savedState?.waiting || false)
+  const [stopped, setStopped] = useState(savedState?.stopped || false)
+  const [initialized, setInitialized] = useState(savedState?.initialized || false)
+  const [showInitButton, setShowInitButton] = useState(savedState?.showInitButton ?? true)
   const [confirmationData, setConfirmationData] = useState<{ text: string; scenarioKey: string } | null>(null)
-  const [autoFixMode, setAutoFixMode] = useState(false)
-  const [autoFixStage, setAutoFixStage] = useState<'fixing' | 'reviewing' | null>(null)
-  const initCalledRef = useRef(false)
-  const initializedRef = useRef(false)
-  const autoPromptSentRef = useRef(false)
+  // Remove internal autoFixMode and autoFixStage - now controlled by App via props
+  const initCalledRef = useRef(savedState?.initCalledRef || false)
+  const initializedRef = useRef(savedState?.initializedRef || false)
+  const autoPromptSentRef = useRef(savedState?.autoPromptSentRef || false)
   const abortedRef = useRef(false)
   const resultRef = useRef<HTMLDivElement>(null)
-
-  const autoFixModeRef = useRef(false)
-  const autoFixStageRef = useRef<'fixing' | 'reviewing' | null>(null)
+  
+  // Save state to window on every change (for HMR recovery)
+  useEffect(() => {
+    if (window.__workerStates) {
+      window.__workerStates[tabId] = {
+        history,
+        waiting,
+        stopped,
+        initialized,
+        showInitButton,
+        initCalledRef: initCalledRef.current,
+        initializedRef: initializedRef.current,
+        autoPromptSentRef: autoPromptSentRef.current,
+      }
+    }
+  }, [tabId, history, waiting, stopped, initialized, showInitButton])
 
   const onRefreshRef = useRef(onRefresh)
   onRefreshRef.current = onRefresh
@@ -217,6 +204,18 @@ export function CodexWorkerBase({
   confirmationCardConfigRef.current = confirmationCardConfig
   const onDroidFixRequestRef = useRef(onDroidFixRequest)
   onDroidFixRequestRef.current = onDroidFixRequest
+  const onAutoFixStartRef = useRef(onAutoFixStart)
+  onAutoFixStartRef.current = onAutoFixStart
+  const onTriggerReReviewRefStable = useRef(onTriggerReReviewRef)
+  onTriggerReReviewRefStable.current = onTriggerReReviewRef
+  const onPushHistoryRefStable = useRef(onPushHistoryRef)
+  onPushHistoryRefStable.current = onPushHistoryRef
+  const onDismissConfirmationRefStable = useRef(onDismissConfirmationRef)
+  onDismissConfirmationRefStable.current = onDismissConfirmationRef
+  const onSendMessageRefStable = useRef(onSendMessageRef)
+  onSendMessageRefStable.current = onSendMessageRef
+  const onAutoFixReviewCompleteRef = useRef(onAutoFixReviewComplete)
+  onAutoFixReviewCompleteRef.current = onAutoFixReviewComplete
   // Unique token generated at init time for precise session routing
   const pendingTokenRef = useRef<string | null>(null)
 
@@ -246,79 +245,76 @@ export function CodexWorkerBase({
   const reviewAgainPrompt = config.leftButtons.find(b => b.label === 'Review Again')?.prompt
     || '请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]'
 
-  // Auto-fix cycle handler: processes completed task results
-  const handleAutoFixCycle = useCallback((resultText: string) => {
-    const stage = autoFixStageRef.current
-
-    if (stage === 'fixing') {
-      // Fix completed → send Review Again
-      setHistory(prev => [...prev, { role: 'user', text: `[Auto Fix → Review] ${reviewAgainPrompt}` }])
-      setAutoFixStage('reviewing')
-      autoFixStageRef.current = 'reviewing'
-      setWaiting(true)
-      if (projectPath) {
-        saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, reviewAgainPrompt, 'Codex Worker > Auto Fix Review').catch(() => {})
-      }
-      sendToReview(reviewAgainPrompt)
-      return true
-    }
-
-    if (stage === 'reviewing' && confirmationCardConfig) {
-      // Review completed → check if there are still items to fix
-      const scenarioKey = detectScenario(resultText, confirmationCardConfig)
-      if (scenarioKey !== 'default') {
-        const scenario = confirmationCardConfig.scenarios[scenarioKey]
-        const { items } = parseCheckboxItems(resultText, scenario?.trigger)
-
-        // Filter to only unchecked items
-        const uncheckedItems = items.filter(item => !item.checked)
-
-        if (uncheckedItems.length === 0) {
-          // No more unchecked items → Auto Fix complete!
-          setAutoFixMode(false)
-          autoFixModeRef.current = false
-          setAutoFixStage(null)
-          autoFixStageRef.current = null
-          setHistory(prev => [...prev, { role: 'assistant', text: '🎉 Auto Fix 完成！所有问题已解决！' }])
-          triggerCelebration()
-          return true
-        }
-
-        // Still have unchecked items → auto-select all and send fix
-        const selectedItems = uncheckedItems.map(item => item.text)
-        const template = scenario?.buttons.find(b => b.action === 'auto_fix')?.messageTemplate
-          || '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
-        const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
-        const fixMessage = template.replace('{selected_items}', itemsText)
-
-        setHistory(prev => [...prev, { role: 'user', text: `[Auto Fix → Fix] ${fixMessage}` }])
-        setAutoFixStage('fixing')
-        autoFixStageRef.current = 'fixing'
+  // Register onTriggerReReviewRef: allows App to externally trigger a re-review
+  useEffect(() => {
+    const ref = onTriggerReReviewRefStable.current
+    if (ref) {
+      ref.current = () => {
+        if (!initializedRef.current) return
+        setHistory(prev => [...prev, { role: 'user', text: `[Auto Fix → Review] ${reviewAgainPrompt}` }])
         setWaiting(true)
         if (projectPath) {
-          saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, fixMessage, 'Codex Worker > Auto Fix Cycle').catch(() => {})
+          saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, reviewAgainPrompt, 'Codex Worker > Auto Fix Review').catch(() => {})
         }
-        sendToReview(fixMessage)
+        sendToReview(reviewAgainPrompt)
+      }
+    }
+    return () => {
+      const r = onTriggerReReviewRefStable.current
+      if (r) r.current = null
+    }
+  }, [reviewAgainPrompt, projectPath, changeId, sendToReview])
+
+  // Register onPushHistoryRef: allows App to inject status messages into Codex history
+  useEffect(() => {
+    const ref = onPushHistoryRefStable.current
+    if (ref) {
+      ref.current = (msg: string) => {
+        setHistory(prev => [...prev, { role: 'assistant', text: msg }])
+      }
+    }
+    return () => {
+      const r = onPushHistoryRefStable.current
+      if (r) r.current = null
+    }
+  }, [])
+
+  // Register onDismissConfirmationRef: allows App to dismiss the confirmation card
+  useEffect(() => {
+    const ref = onDismissConfirmationRefStable.current
+    if (ref) {
+      ref.current = () => {
+        setConfirmationData(null)
+      }
+    }
+    return () => {
+      const r = onDismissConfirmationRefStable.current
+      if (r) r.current = null
+    }
+  }, [])
+
+  // Register onSendMessageRef: allows Self-Review Cycle window to send messages
+  useEffect(() => {
+    const ref = onSendMessageRefStable.current
+    if (ref) {
+      ref.current = (message: string) => {
+        if (waiting || !initialized) {
+          console.warn(`[CodexWorkerBase:${tabId}] sendMessage rejected — busy or not initialized`)
+          return false
+        }
+        setHistory(prev => [...prev, { role: 'user', text: message }])
+        setWaiting(true)
+        sendToReview(message)
         return true
       }
-
-      // No trigger matched → treat as fix complete, review again
-      setAutoFixMode(false)
-      autoFixModeRef.current = false
-      setAutoFixStage(null)
-      autoFixStageRef.current = null
-      setHistory(prev => [...prev, { role: 'assistant', text: '🎉 Auto Fix 完成！' }])
-      triggerCelebration()
-      return true
     }
-
-    return false
-  }, [reviewAgainPrompt, confirmationCardConfig, projectPath, changeId, sendToReview])
+    return () => {
+      const r = onSendMessageRefStable.current
+      if (r) r.current = null
+    }
+  }, [waiting, initialized, sendToReview, tabId])
 
   // Hook listener — all callback/ref props are stabilized above.
-  const handleAutoFixCycleRef = useRef(handleAutoFixCycle)
-  handleAutoFixCycleRef.current = handleAutoFixCycle
-
   useEffect(() => {
     onStopHookRefStable.current.current = (data: any) => {
       const eventName = data.event || ''
@@ -353,8 +349,10 @@ export function CodexWorkerBase({
           setHistory(prev => [...prev, { role: 'assistant', text: finalMessage }])
           setWaiting(false)
 
-          // Auto-fix mode: handle cycle automatically
-          if (autoFixModeRef.current && handleAutoFixCycleRef.current(finalMessage)) {
+          // Auto-fix mode (reviewing stage): notify App with review result
+          // Only route to auto-fix handler when in reviewing stage; otherwise fall through to normal handling
+          if (autoFixActive && autoFixStage === 'reviewing' && onAutoFixReviewCompleteRef.current) {
+            onAutoFixReviewCompleteRef.current(finalMessage, tabId)
             if (onRefreshRef.current) onRefreshRef.current()
             return
           }
@@ -379,8 +377,10 @@ export function CodexWorkerBase({
         setHistory(prev => [...prev, { role: 'assistant', text: result }])
         setWaiting(false)
 
-        // Auto-fix mode: handle cycle automatically
-        if (autoFixModeRef.current && handleAutoFixCycleRef.current(result)) {
+        // Auto-fix mode (reviewing stage): notify App with review result
+        // Only route to auto-fix handler when in reviewing stage; otherwise fall through to normal handling
+        if (autoFixActive && autoFixStage === 'reviewing' && onAutoFixReviewCompleteRef.current) {
+          onAutoFixReviewCompleteRef.current(result, tabId)
           if (onRefreshRef.current) onRefreshRef.current()
           return
         }
@@ -398,7 +398,7 @@ export function CodexWorkerBase({
     }
     return () => { onStopHookRefStable.current.current = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabId, changeId, bridge, config.confirmation])
+  }, [tabId, changeId, bridge, config.confirmation, autoFixActive, autoFixStage])
 
   const shellSingleQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 
@@ -522,14 +522,11 @@ export function CodexWorkerBase({
   // Cleanup — deps are intentionally empty: tabId is stable for the lifetime of the component,
   // and bridge is a global singleton. This ensures cleanup runs only on unmount.
   useEffect(() => {
-    console.log(`[CodexWorker:${tabId}] ✅ MOUNTED`)
+    console.log(`[CodexWorker:${tabId}] ✅ MOUNTED, changeId=${changeId}, resumeSessionId=${resumeSessionId}`)
     abortedRef.current = false  // Reset on mount (important for HMR)
     return () => {
-      // Only kill terminal if the tab is being explicitly closed by the user.
-      // During Vite HMR, components unmount/remount but the tab is not closing —
-      // killing the terminal would disrupt running processes.
       const isClosing = window.__closingTabs?.has(tabId)
-      console.warn(`[CodexWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}`, new Error('unmount stack'))
+      console.warn(`[CodexWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}, closingTabs=${JSON.stringify([...(window.__closingTabs || [])])}`)
       abortedRef.current = true
       // Clean up pending token
       if (pendingTokenRef.current) {
@@ -550,14 +547,16 @@ export function CodexWorkerBase({
         if (window.__onChangeTerminalOutput) delete window.__onChangeTerminalOutput[tabId]
         if (window.__onChangeTerminalOutputBytes) delete window.__onChangeTerminalOutputBytes[tabId]
         if (window.__onChangeTerminalExit) delete window.__onChangeTerminalExit[tabId]
+        // Clean up HMR state persistence
+        if (window.__workerStates) delete window.__workerStates[tabId]
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Auto-init after all components are mounted
+  // Auto-init after all components are mounted (unless autoInit is explicitly false)
   useEffect(() => {
-    if (!bridge) return
+    if (!bridge || autoInit === false) return
     const raf = requestAnimationFrame(() => {
       setTimeout(() => {
         if (!initCalledRef.current && !abortedRef.current) {
@@ -567,11 +566,12 @@ export function CodexWorkerBase({
     })
     return () => cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge])  // Only depend on bridge, not handleInit
+  }, [bridge, autoInit])  // Only depend on bridge and autoInit, not handleInit
 
   // Auto-send init prompt after initialized AND ready (config-driven)
+  // Skip if suppressAutoInitPrompt is true (used by Self-Review Cycle which sends its own prompt)
   useEffect(() => {
-    if (!initialized || waiting || autoPromptSentRef.current) return
+    if (!initialized || waiting || autoPromptSentRef.current || suppressAutoInitPrompt) return
     if (!config.autoInitPrompt) return
 
     autoPromptSentRef.current = true
@@ -582,7 +582,58 @@ export function CodexWorkerBase({
       saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, `Codex Worker (${changeId}) > Auto-init prompt`).catch(() => {})
     }
     sendToReview(prompt)
-  }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToReview])
+  }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToReview, suppressAutoInitPrompt])
+
+  // ─── Confirmation handlers ───────────────────────────────────────
+  // NOTE: useCallback must be declared before the early return to maintain
+  // consistent hook call order across renders (Rules of Hooks).
+
+  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
+    if (action === 'cancel') {
+      setConfirmationData(null)
+      return
+    }
+
+    // For droid_fix target, delegate to App via onDroidFixRequest
+    if (button.target === 'droid_worker') {
+      setConfirmationData(null)
+      if (onDroidFixRequestRef.current) {
+        onDroidFixRequestRef.current(selectedItems, tabId)
+      }
+      return
+    }
+
+    // Build fix message from template
+    const template = button.messageTemplate || config.confirmation?.responseTemplate || '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
+    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
+    const fixMessage = template.replace('{selected_items}', itemsText)
+
+    // Auto Fix mode: delegate to App via onAutoFixStart (starts Codex↔Droid loop)
+    if (action === 'auto_fix') {
+      setConfirmationData(null)
+      if (onAutoFixStartRef.current) {
+        onAutoFixStartRef.current(selectedItems, tabId)
+      }
+      return
+    }
+
+    // Fix / submit: send in current Codex Worker
+    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
+    setConfirmationData(null)
+    setWaiting(true)
+    if (projectPath) {
+      saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, fixMessage, `Codex Worker > ${button.label}`).catch(() => {})
+    }
+    sendToReview(fixMessage)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.confirmation?.responseTemplate, changeId, projectPath, sendToReview])
+
+  // Check if a message matches a confirmation trigger
+  const getScenarioKeyForMessage = useCallback((text: string): string | null => {
+    if (!confirmationCardConfig) return null
+    const key = detectScenario(text, confirmationCardConfig)
+    return key !== 'default' ? key : null
+  }, [confirmationCardConfig])
 
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
 
@@ -658,86 +709,15 @@ export function CodexWorkerBase({
     }
   }
 
-  // ─── Confirmation handlers ───────────────────────────────────────
-
-  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
-    if (action === 'cancel') {
-      setConfirmationData(null)
-      return
-    }
-
-    // For droid_fix target, delegate to App via onDroidFixRequest
-    if (button.target === 'droid_worker') {
-      setConfirmationData(null)
-      if (onDroidFixRequestRef.current) {
-        onDroidFixRequestRef.current(selectedItems, tabId)
-      }
-      return
-    }
-
-    // Build fix message from template
-    const template = button.messageTemplate || config.confirmation?.responseTemplate || '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
-    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
-    const fixMessage = template.replace('{selected_items}', itemsText)
-
-    // Auto Fix mode: enable auto-fix loop
-    if (action === 'auto_fix') {
-      setAutoFixMode(true)
-      autoFixModeRef.current = true
-      setAutoFixStage('fixing')
-      autoFixStageRef.current = 'fixing'
-      setHistory(prev => [...prev, { role: 'user', text: `[Auto Fix 开始] ${fixMessage}` }])
-      setConfirmationData(null)
-      setWaiting(true)
-      if (projectPath) {
-        saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, fixMessage, 'Codex Worker > Auto Fix Start').catch(() => {})
-      }
-      sendToReview(fixMessage)
-      return
-    }
-
-    // Fix / submit: send in current Codex Worker
-    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
-    setConfirmationData(null)
-    setWaiting(true)
-    if (projectPath) {
-      saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, fixMessage, `Codex Worker > ${button.label}`).catch(() => {})
-    }
-    sendToReview(fixMessage)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.confirmation?.responseTemplate, changeId, projectPath, sendToReview])
-
-  // Check if a message matches a confirmation trigger
-  const getScenarioKeyForMessage = useCallback((text: string): string | null => {
-    if (!confirmationCardConfig) return null
-    const key = detectScenario(text, confirmationCardConfig)
-    return key !== 'default' ? key : null
-  }, [confirmationCardConfig])
-
   // ─── Render ──────────────────────────────────────────────────────
 
   const title = changeId ? `Codex Worker: ${changeId}` : 'Codex Worker'
-  const titleSuffix = stopped ? ' (Stopped)' : autoFixMode ? ` [Auto Fix ${autoFixStage === 'fixing' ? '修复中' : '评审中'}...]` : ''
+  const titleSuffix = stopped ? ' (Stopped)' : ''
 
   return (
     <div className="wizard-panel">
       <div className="wizard-panel-header">
         <span className="wizard-panel-title">{title}{titleSuffix}</span>
-        {autoFixMode && (
-          <button 
-            className="btn-stop" 
-            onClick={() => {
-              setAutoFixMode(false)
-              autoFixModeRef.current = false
-              setAutoFixStage(null)
-              autoFixStageRef.current = null
-              setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Auto Fix 已停止' }])
-            }}
-            style={{ marginLeft: '10px', fontSize: '12px', padding: '4px 8px' }}
-          >
-            停止 Auto Fix
-          </button>
-        )}
       </div>
 
       {/* Init screen */}
@@ -809,6 +789,11 @@ export function CodexWorkerBase({
           ))}
           {waiting && (
             <button className="btn-stop" onClick={handleStop}>⏹ Stop</button>
+          )}
+          {autoFixActive && onAutoFixStop && (
+            <button className="btn-stop" onClick={() => onAutoFixStop(tabId)} style={{ marginLeft: '8px' }}>
+              ⏹ Stop Auto Fix
+            </button>
           )}
         </div>
         <div className="wizard-actions-right">

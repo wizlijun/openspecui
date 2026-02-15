@@ -19,6 +19,13 @@ import subprocess
 import json
 import base64
 import time
+from autofix_logic import (
+    is_codex_turn_complete,
+    extract_codex_final_message,
+    parse_checkbox_items,
+    filter_p0p1_items,
+    decide_autofix_next,
+)
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -503,6 +510,24 @@ class NativeBridgeHandler(NSObject):
                 dialog_data = msg.get('data', {})
                 self.coordinator.show_confirmation_dialog(str(request_id), dialog_data)
 
+            # Auto Fix window
+            elif msg_type == 'openAutoFixWindow':
+                change_id = msg.get('changeId', '')
+                project_path = msg.get('projectPath', '')
+                self.coordinator.open_autofix_window(change_id, project_path)
+
+            # Auto Fix send failure notification
+            elif msg_type == 'autoFixSendFailed':
+                worker_type = msg.get('workerType', '')
+                tab_id = msg.get('tabId', '')
+                self.coordinator.log('warn', 'autofix_send_failed', f'worker={worker_type}, tab={tab_id}')
+                # Notify all active Auto Fix windows
+                for afw in list(self.coordinator._autofix_windows):
+                    try:
+                        afw.on_send_failed(worker_type, tab_id)
+                    except Exception as e:
+                        print(f"[AutoFix] Send failure dispatch error: {e}")
+
             # JS console forwarding
             elif msg_type == 'jsConsole':
                 level = msg.get('level', 'log')
@@ -845,6 +870,8 @@ class AppCoordinator:
         # Track active sessions for persistence
         self.active_change_sessions = {}  # {tab_id: {'sessionId': str, 'changeId': str|None}}
         self.active_codex_sessions = {}  # {tab_id: {'sessionId': str, 'changeId': str|None}}
+        # Track active Auto Fix windows
+        self._autofix_windows = set()
 
     # ─── Log Panel (NSTextView) ─────────────────────────────────────
 
@@ -1394,6 +1421,46 @@ class AppCoordinator:
         NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
         self.log('callback', 'confirmation_result', f'requestId={request_id}, action={result.get("action")}')
 
+    def open_autofix_window(self, change_id: str, project_path: str):
+        """Open an Auto Fix window for the given change."""
+        self.log('info', 'open_autofix_window', f'changeId={change_id}, path={project_path}')
+        
+        # Generate unique tab IDs for this auto fix session (ms timestamp + random suffix to avoid collision)
+        import random
+        timestamp_ms = int(time.time() * 1000)
+        random_suffix = ''.join(random.choices('0123456789abcdef', k=4))
+        codex_tab_id = f'autofix-codex-{change_id or "review"}-{timestamp_ms}-{random_suffix}'
+        droid_tab_id = f'autofix-droid-{change_id or "review"}-{timestamp_ms}-{random_suffix}'
+        
+        # First, notify main webview to create visible Codex and Droid Worker tabs
+        if self.webview:
+            payload = json.dumps({
+                'event': 'create-autofix-workers',
+                'codexTabId': codex_tab_id,
+                'droidTabId': droid_tab_id,
+                'changeId': change_id,
+            }, ensure_ascii=False)
+            b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+            js = f"""
+            if (window.__onCreateAutoFixWorkers) {{
+                try {{
+                    var b = atob('{b64}');
+                    var a = new Uint8Array(b.length);
+                    for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                    var text = new TextDecoder('utf-8').decode(a);
+                    window.__onCreateAutoFixWorkers(JSON.parse(text));
+                }} catch(e) {{ console.error('[AutoFix] create workers error:', e); }}
+            }}
+            """
+            def do_eval():
+                self.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+        
+        # Then create and show the Auto Fix window
+        autofix_window = AutoFixWindow(self, codex_tab_id, droid_tab_id, change_id, project_path)
+        self._autofix_windows.add(autofix_window)
+        autofix_window.show()
+
     def notify_web_refresh(self, data: dict):
         """Notify the web app that a hook event occurred (e.g. file changed, session ended)."""
         if not self.webview:
@@ -1433,6 +1500,13 @@ class AppCoordinator:
         log_keys = ('tool_name', 'session_id', 'reason', 'source', 'hook_event_name', 'event')
         log_data = {k: v for k, v in data.items() if k in log_keys}
         self.log('hook', event_name, json.dumps(log_data, ensure_ascii=False))
+        
+        # Notify active Auto Fix windows about hook events
+        for afw in list(self._autofix_windows):
+            try:
+                afw.on_hook_event(data)
+            except Exception as e:
+                print(f"[AutoFix] Hook dispatch error: {e}")
 
 
 # ─── WKUIDelegate for JS alert/confirm/prompt ─────────────────────
@@ -1507,6 +1581,732 @@ class ConfirmationWindowDelegate(NSObject):
         if not self._did_respond and not getattr(self.handler, '_did_send', False):
             self._did_respond = True
             self.handler._send_result({'action': 'cancel'})
+
+
+# ─── Auto Fix Window (Independent Sidebar Window) ─────────────────
+
+class AutoFixBridgeHandler(NSObject):
+    """Handle messages from the Auto Fix window WKWebView."""
+
+    def initWithAutoFixWindow_(self, auto_fix_window):
+        self = objc.super(AutoFixBridgeHandler, self).init()
+        if self is None:
+            return None
+        self.auto_fix_window = auto_fix_window
+        return self
+
+    def userContentController_didReceiveScriptMessage_(self, controller, message):
+        try:
+            body = message.body()
+            if isinstance(body, str):
+                data = json.loads(body)
+            elif isinstance(body, dict):
+                data = body
+            else:
+                return
+
+            msg_type = data.get('type', '')
+            if msg_type == 'stop':
+                self.auto_fix_window.stop()
+        except Exception as e:
+            print(f"AutoFixBridgeHandler error: {e}")
+
+
+class AutoFixWindowDelegate(NSObject):
+    """NSWindowDelegate to detect when the Auto Fix window is closed."""
+
+    def initWithAutoFixWindow_(self, auto_fix_window):
+        self = objc.super(AutoFixWindowDelegate, self).init()
+        if self is None:
+            return None
+        self.auto_fix_window = auto_fix_window
+        return self
+
+    def windowWillClose_(self, notification):
+        if self.auto_fix_window:
+            self.auto_fix_window.stop()
+            self.auto_fix_window.cleanup()
+
+
+class AutoFixWindow:
+    """Independent sidebar window that orchestrates the Self-Review Cycle loop.
+    
+    Flow per cycle:
+      1. Init (start Codex + Droid terminals)
+      2. Send review prompt to Codex Worker via UI
+      3. Parse review result, auto-select all P0/P1 items
+      4. Send fix prompt to Droid Worker via UI
+      5. Check if P0/P1 remain → if yes, loop back to step 2
+    """
+
+    def __init__(self, coordinator, codex_tab_id, droid_tab_id, change_id, project_path):
+        self.coordinator = coordinator
+        self.codex_tab_id = codex_tab_id
+        self.droid_tab_id = droid_tab_id
+        self.change_id = change_id
+        self.project_path = project_path
+        self.window = None
+        self.webview = None
+        self._running = False
+        self._cycle = 0
+        self._max_cycles = 10
+        self._stage = 'idle'  # idle | init | reviewing | selecting | fixing | checking
+        self._codex_session_id = None
+        self._droid_session_id = None
+        self._codex_initialized = False
+        self._droid_initialized = False
+        self._stage_timer = None  # Timer for reviewing/fixing stage timeout
+        self._stage_timeout_secs = 300  # 5 minutes per stage
+        # Load confirmation card config (mirrors TS loadConfirmationCardConfig)
+        self._scenarios = self._load_scenarios()
+        # Review prompt — includes changeId context so Codex reviews the specific change
+        change_ctx = f'changeId为{change_id}。' if change_id else ''
+        self._review_prompt = f'严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]。{change_ctx}'
+
+    def _load_scenarios(self):
+        """Load confirmation card scenarios from YAML config.
+        
+        Mirrors: app/src/loadConfirmationCardConfig.ts → loadConfirmationCardConfig
+        Falls back to a default with [fix_confirmation] trigger if file not found.
+        """
+        default_scenarios = {
+            'review_confirm': {
+                'trigger': '[fix_confirmation]',
+                'title': '评审结果',
+            }
+        }
+        config_path = os.path.join(self.project_path, '.openspec', 'confirmation_card.yml')
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                import yaml
+                parsed = yaml.safe_load(f)
+            if not parsed or not isinstance(parsed.get('scenarios'), dict):
+                return default_scenarios
+            return parsed['scenarios']
+        except Exception:
+            return default_scenarios
+
+    def _resolve_fix_template(self, scenario_key=None):
+        """Resolve fix message template from confirmation_card.yml scenarios.
+        
+        Mirrors: app/src/App.tsx handleDroidFixRequest template resolution.
+        When scenario_key is provided, looks up that specific scenario first.
+        Falls back to scanning all scenarios, then to hardcoded default.
+        """
+        default_template = '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
+        try:
+            # If scenario_key is provided, search that scenario first
+            if scenario_key and scenario_key in self._scenarios:
+                scenarios_to_search = [self._scenarios[scenario_key]]
+            else:
+                scenarios_to_search = list(self._scenarios.values())
+            
+            for scenario in scenarios_to_search:
+                buttons = scenario.get('buttons', [])
+                exact_btn = next((b for b in buttons if b.get('action') == 'auto_fix' and b.get('message_template')), None)
+                fallback_btn = next((b for b in buttons if b.get('target') == 'droid_worker' and b.get('message_template')), None)
+                btn = exact_btn or fallback_btn
+                if btn and btn.get('message_template'):
+                    return btn['message_template']
+        except Exception:
+            pass
+        return default_template
+
+    def show(self):
+        """Create and show the Auto Fix sidebar window."""
+        def do_create():
+            try:
+                screen = NSScreen.mainScreen().frame()
+                w, h = 380, 700
+                # Position on the right side of the screen
+                x = screen.size.width - w - 20
+                y = (screen.size.height - h) / 2
+
+                style = (NSWindowStyleMaskTitled |
+                         NSWindowStyleMaskClosable |
+                         NSWindowStyleMaskResizable |
+                         NSWindowStyleMaskMiniaturizable)
+
+                self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+                    NSMakeRect(x, y, w, h), style, NSBackingStoreBuffered, False
+                )
+                self.window.setTitle_(f"Self-Review Cycle: {self.change_id or 'Review'}")
+                self.window.setMinSize_((320, 500))
+
+                # WKWebView with message handler
+                wk_config = WKWebViewConfiguration.alloc().init()
+                uc = wk_config.userContentController()
+
+                self._bridge_handler = AutoFixBridgeHandler.alloc().initWithAutoFixWindow_(self)
+                uc.addScriptMessageHandler_name_(self._bridge_handler, "autoFixBridge")
+
+                self.webview = WKWebView.alloc().initWithFrame_configuration_(
+                    NSMakeRect(0, 0, w, h), wk_config
+                )
+
+                # Load HTML
+                html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'auto_fix_window.html')
+                with open(html_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+                self.webview.loadHTMLString_baseURL_(html_content, None)
+
+                self.window.setContentView_(self.webview)
+
+                # Window delegate
+                self._win_delegate = AutoFixWindowDelegate.alloc().initWithAutoFixWindow_(self)
+                self.window.setDelegate_(self._win_delegate)
+
+                # Keep references alive (on self, not on NSWindow which is KVO-proxied)
+                self._ref_handler = self._bridge_handler
+                self._ref_delegate = self._win_delegate
+                self._ref_webview = self.webview
+
+                self.window.makeKeyAndOrderFront_(None)
+                self.window.setLevel_(3)  # NSFloatingWindowLevel
+
+                # Start the loop after a short delay for webview to load
+                self._running = True
+                threading.Timer(0.5, self._start_loop).start()
+
+            except Exception as e:
+                print(f"AutoFixWindow.show error: {e}")
+
+        NSOperationQueue.mainQueue().addOperationWithBlock_(do_create)
+
+    def _eval_js(self, js):
+        """Evaluate JavaScript in the Auto Fix webview on the main thread."""
+        if not self.webview:
+            return
+        def do_eval():
+            self.webview.evaluateJavaScript_completionHandler_(js, None)
+        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+    def _update_step(self, step_num, state, desc=''):
+        safe_desc = desc.replace("'", "\\'").replace('\n', ' ')
+        self._eval_js(f"window.updateStep({step_num}, '{state}', '{safe_desc}')")
+
+    def _update_cycle(self, count):
+        self._eval_js(f"window.updateCycle({count})")
+
+    def _update_status(self, text):
+        safe_text = text.replace("'", "\\'").replace('\n', ' ')
+        self._eval_js(f"window.updateStatus('{safe_text}')")
+
+    def _session_abbrev(self, session_id: str) -> str:
+        """Generate a short abbreviation for a session ID (first 6 chars)."""
+        if not session_id:
+            return '???'
+        return session_id[:6] if len(session_id) >= 6 else session_id
+
+    def _dismiss_confirmation_card(self):
+        """Notify main webview to dismiss the confirmation card in the Codex Worker tab."""
+        if not self.coordinator.webview:
+            return
+        payload = json.dumps({
+            'event': 'dismiss-confirmation-card',
+            'codexTabId': self.codex_tab_id,
+        }, ensure_ascii=False)
+        b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+        js = f"""
+        if (window.__onDismissConfirmationCard) {{
+            try {{
+                var b = atob('{b64}');
+                var a = new Uint8Array(b.length);
+                for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                var text = new TextDecoder('utf-8').decode(a);
+                window.__onDismissConfirmationCard(JSON.parse(text));
+            }} catch(e) {{ console.error('[AutoFix] dismiss card error:', e); }}
+        }}
+        """
+        def do_eval():
+            self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+    def _start_loop(self):
+        """Start the auto fix loop: wait for workers created by main webview to initialize."""
+        if not self._running:
+            return
+        self._eval_js("window.setRunning(true)")
+        self._stage = 'init'
+        self._update_step(1, 'active', '等待 Codex 和 Droid Worker 初始化...')
+        self._update_status('等待 Worker 初始化...')
+        
+        # Workers are created by the main webview (visible tabs).
+        # We wait for hook events (SessionStart for Droid, codex-notify for Codex)
+        # to know when they're ready. Set a timeout fallback.
+        def init_timeout():
+            if not self._running:
+                return
+            if not self._codex_initialized or not self._droid_initialized:
+                missing = []
+                if not self._codex_initialized:
+                    missing.append('Codex')
+                if not self._droid_initialized:
+                    missing.append('Droid')
+                print(f'[AutoFix] Init timeout — still waiting for: {", ".join(missing)}')
+                self._update_step(1, 'error', f'初始化超时：{", ".join(missing)} 未就绪')
+                self._update_status(f'初始化超时，请检查 Worker tabs')
+                self._complete(False, f'初始化超时：{", ".join(missing)} 未就绪')
+        threading.Timer(60.0, init_timeout).start()
+
+    def _check_both_ready(self):
+        """Check if both workers are initialized and start first review cycle."""
+        if not self._running:
+            return
+        if self._codex_initialized and self._droid_initialized:
+            codex_abbrev = self._session_abbrev(self._codex_session_id or '')
+            droid_abbrev = self._session_abbrev(self._droid_session_id or '')
+            self._update_step(1, 'completed', f'Codex [{codex_abbrev}] + Droid [{droid_abbrev}] 初始化完成 ✓')
+            self._update_status('初始化完成，开始第一轮评审...')
+            self._start_review_cycle()
+
+    def _cancel_stage_timer(self):
+        """Cancel any active stage timeout timer."""
+        if self._stage_timer is not None:
+            self._stage_timer.cancel()
+            self._stage_timer = None
+
+    def _start_stage_timer(self, stage_label):
+        """Start a timeout timer for the current reviewing/fixing stage."""
+        self._cancel_stage_timer()
+        cycle = self._cycle
+
+        def on_timeout():
+            if not self._running:
+                return
+            # Only fire if still in the same stage and cycle
+            if self._cycle != cycle:
+                return
+            if self._stage not in ('reviewing', 'fixing'):
+                return
+            self.coordinator.log('warn', 'autofix_stage_timeout',
+                                 f'stage={self._stage}, cycle={cycle}')
+            self._update_step(2 if self._stage == 'reviewing' else 4, 'error',
+                              f'{stage_label}超时 ({self._stage_timeout_secs}s)')
+            self._complete(False,
+                           f'第 {cycle} 轮{stage_label}超时 ({self._stage_timeout_secs}s)，请检查 Worker 状态')
+
+        self._stage_timer = threading.Timer(float(self._stage_timeout_secs), on_timeout)
+        self._stage_timer.daemon = True
+        self._stage_timer.start()
+
+    def _start_review_cycle(self):
+        """Start a new review cycle."""
+        if not self._running:
+            return
+        self._cycle += 1
+        self._update_cycle(self._cycle)
+        
+        if self._cycle > self._max_cycles:
+            self._complete(False, f'已达到最大循环次数 ({self._max_cycles})，请手动检查')
+            return
+        
+        self._stage = 'reviewing'
+        self._update_step(2, 'active', f'第 {self._cycle} 轮评审中...')
+        self._update_status(f'第 {self._cycle} 轮：Codex 正在评审代码...')
+        
+        # Start stage timeout
+        self._start_stage_timer('评审')
+        
+        # Send review prompt to Codex
+        success = self._send_to_codex(self._review_prompt)
+        if not success:
+            self._cancel_stage_timer()
+            self._update_step(2, 'error', '发送评审请求失败')
+            self._complete(False, f'第 {self._cycle} 轮发送评审请求失败，请检查 Codex Worker 状态')
+
+    def _send_to_codex(self, text):
+        """Send a message to the Codex Worker tab via main webview JS bridge.
+        
+        Returns True if send was attempted, False if preconditions failed.
+        """
+        if not self._running or not self.coordinator.webview:
+            return False
+        return self._send_to_worker('codex', self.codex_tab_id, text)
+
+    def _send_to_droid(self, text):
+        """Send a message to the Droid Worker tab via main webview JS bridge.
+        
+        Returns True if send was attempted, False if preconditions failed.
+        """
+        if not self._running or not self.coordinator.webview:
+            return False
+        return self._send_to_worker('droid', self.droid_tab_id, text)
+
+    def _send_to_worker(self, worker_type, tab_id, text):
+        """Send a message to a worker tab via main webview JS bridge.
+        
+        This triggers the worker tab's sendMessage ref, which properly updates
+        the UI (shows the message in history, sets waiting state, etc.)
+        Returns True if send was dispatched, False on error.
+        """
+        try:
+            safe_tab_id = tab_id.replace('\\', '\\\\').replace("'", "\\'")
+            payload = json.dumps({
+                'event': 'autofix-send-to-worker',
+                'workerType': worker_type,
+                'tabId': tab_id,
+                'message': text,
+            }, ensure_ascii=False)
+            b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+            js = f"""
+            if (window.__onAutoFixSendToWorker) {{
+                try {{
+                    var b = atob('{b64}');
+                    var a = new Uint8Array(b.length);
+                    for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                    var text = new TextDecoder('utf-8').decode(a);
+                    window.__onAutoFixSendToWorker(JSON.parse(text));
+                }} catch(e) {{
+                    console.error('[SelfReviewCycle] send to worker error:', e);
+                    // Notify Python of send failure via nativeBridge
+                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {{
+                        window.webkit.messageHandlers.nativeBridge.postMessage(JSON.stringify({{
+                            type: 'autoFixSendFailed', workerType: '{worker_type}', tabId: '{safe_tab_id}'
+                        }}));
+                    }}
+                }}
+            }} else {{
+                console.error('[SelfReviewCycle] __onAutoFixSendToWorker not registered');
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {{
+                    window.webkit.messageHandlers.nativeBridge.postMessage(JSON.stringify({{
+                        type: 'autoFixSendFailed', workerType: '{worker_type}', tabId: '{safe_tab_id}'
+                    }}));
+                }}
+            }}
+            """
+            def do_eval():
+                self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+            return True
+        except Exception as e:
+            self.coordinator.log('error', 'autofix_send_worker_failed',
+                                 f'worker={worker_type}, tab={tab_id}, error={e}')
+            return False
+
+    def _extract_session_id(self, data):
+        """Extract session_id from hook event data with fallback to payload.thread-id.
+        
+        Mirrors the logic in on_hook_event to ensure consistent session_id extraction.
+        """
+        session_id = data.get('session_id', '')
+        if not session_id:
+            payload = data.get('payload', {})
+            if isinstance(payload, dict):
+                session_id = payload.get('thread-id') or payload.get('thread_id') or ''
+        return session_id
+
+    def _resolve_tab_for_session(self, session_id):
+        """Look up which tab_id owns a given session_id.
+        
+        Checks both active_change_sessions (Droid) and active_codex_sessions (Codex).
+        Returns tab_id or None if not yet registered.
+        """
+        if not session_id:
+            return None
+        for tab_id, info in self.coordinator.active_change_sessions.items():
+            if info.get('sessionId') == session_id:
+                return tab_id
+        for tab_id, info in self.coordinator.active_codex_sessions.items():
+            if info.get('sessionId') == session_id:
+                return tab_id
+        return None
+
+    def on_send_failed(self, worker_type, tab_id):
+        """Called when the JS bridge reports that sendMessage returned false for a worker tab."""
+        if not self._running:
+            return
+        # Only handle failures for our own tabs
+        if worker_type == 'codex' and tab_id == self.codex_tab_id:
+            self._cancel_stage_timer()
+            self.coordinator.log('warn', 'autofix_codex_send_failed',
+                                 f'tab={tab_id}, stage={self._stage}, cycle={self._cycle}')
+            if self._stage == 'reviewing':
+                self._update_step(2, 'error', 'Codex Worker 忙或未就绪，发送失败')
+                self._complete(False, f'第 {self._cycle} 轮评审发送失败：Codex Worker 忙或未就绪')
+        elif worker_type == 'droid' and tab_id == self.droid_tab_id:
+            self._cancel_stage_timer()
+            self.coordinator.log('warn', 'autofix_droid_send_failed',
+                                 f'tab={tab_id}, stage={self._stage}, cycle={self._cycle}')
+            if self._stage == 'fixing':
+                self._update_step(4, 'error', 'Droid Worker 忙或未就绪，发送失败')
+                self._complete(False, f'第 {self._cycle} 轮修复发送失败：Droid Worker 忙或未就绪')
+
+    def on_hook_event(self, data):
+        """Called by coordinator when a hook event arrives that matches our sessions."""
+        if not self._running:
+            return
+        
+        event_name = data.get('event', '')
+        # Extract session_id with fallback to thread_id from payload (matches TS logic)
+        session_id = self._extract_session_id(data)
+        
+        # Handle Codex events
+        if event_name == 'codex-notify':
+            if not self._codex_initialized:
+                # Init phase: session maps may not be populated yet (frontend
+                # processes the same event asynchronously).  Try lookup now;
+                # if it fails, queue a deferred retry so the frontend has time
+                # to call trackCodexSession.
+                matched = self._resolve_tab_for_session(session_id)
+                if matched == self.codex_tab_id:
+                    self._accept_codex_init(session_id)
+                elif matched is not None:
+                    # Belongs to a different tab — ignore
+                    return
+                else:
+                    # Not yet in session maps — defer retry
+                    self._defer_init_event(data, 'codex')
+                return
+            
+            # After initialization, only accept events from our bound session
+            if self._codex_session_id and session_id and session_id != self._codex_session_id:
+                return
+            
+            # Check if codex turn is complete
+            if self._is_codex_turn_complete(data):
+                final_msg = self._extract_final_message(data)
+                if final_msg and self._stage == 'reviewing':
+                    self._on_review_complete(final_msg)
+        
+        elif event_name == 'SessionStart':
+            if not self._droid_initialized:
+                matched = self._resolve_tab_for_session(session_id)
+                if matched == self.droid_tab_id:
+                    self._accept_droid_init(session_id)
+                elif matched is not None:
+                    return
+                else:
+                    self._defer_init_event(data, 'droid')
+                return
+            if self._droid_session_id and session_id and session_id != self._droid_session_id:
+                return
+        
+        elif event_name == 'Stop':
+            # Droid fix complete — only accept events from our bound droid session
+            if session_id and session_id == self._droid_session_id and self._stage == 'fixing':
+                result = data.get('last_result', '')
+                self._on_fix_complete(result)
+
+    def _accept_codex_init(self, session_id):
+        """Bind Codex session and mark initialized."""
+        if self._codex_initialized:
+            return
+        self._codex_initialized = True
+        if session_id:
+            self._codex_session_id = session_id
+        session_abbrev = self._session_abbrev(session_id)
+        self._update_step(1, 'active', f'Codex 就绪 [{session_abbrev}] ✓ {"等待 Droid..." if not self._droid_initialized else ""}')
+        self.coordinator.log('info', 'autofix_codex_ready', f'tab={self.codex_tab_id}, session={session_id}')
+        self._check_both_ready()
+
+    def _accept_droid_init(self, session_id):
+        """Bind Droid session and mark initialized."""
+        if self._droid_initialized:
+            return
+        self._droid_initialized = True
+        if session_id:
+            self._droid_session_id = session_id
+        session_abbrev = self._session_abbrev(session_id)
+        self._update_step(1, 'active', f'Droid 就绪 [{session_abbrev}] ✓ {"等待 Codex..." if not self._codex_initialized else ""}')
+        self.coordinator.log('info', 'autofix_droid_ready', f'tab={self.droid_tab_id}, session={session_id}')
+        self._check_both_ready()
+
+    def _defer_init_event(self, data, worker_type, retries_left=5):
+        """Retry init event after a short delay to let frontend populate session maps."""
+        if not self._running:
+            return
+        if retries_left <= 0:
+            # Exhausted retries — log warning and drop
+            session_id = self._extract_session_id(data)
+            self.coordinator.log('warn', 'autofix_init_defer_exhausted',
+                                 f'worker={worker_type}, session={session_id}, tab={self.codex_tab_id if worker_type == "codex" else self.droid_tab_id}')
+            return
+        
+        def retry():
+            if not self._running:
+                return
+            session_id = self._extract_session_id(data)
+            matched = self._resolve_tab_for_session(session_id)
+            expected_tab = self.codex_tab_id if worker_type == 'codex' else self.droid_tab_id
+            
+            if matched == expected_tab:
+                if worker_type == 'codex':
+                    self._accept_codex_init(session_id)
+                else:
+                    self._accept_droid_init(session_id)
+            elif matched is not None:
+                # Belongs to a different tab — ignore
+                return
+            else:
+                # Still not in maps — retry again
+                self._defer_init_event(data, worker_type, retries_left - 1)
+        
+        threading.Timer(0.3, retry).start()
+
+    def _is_codex_turn_complete(self, data):
+        """Check if a codex event indicates turn completion.
+        
+        Delegates to shared autofix_logic module (mirrors TS CodexWorkerBase.tsx).
+        """
+        return is_codex_turn_complete(data)
+
+    def _extract_final_message(self, data):
+        """Extract the final assistant message from a codex event.
+        
+        Delegates to shared autofix_logic module (mirrors TS CodexWorkerBase.tsx).
+        """
+        return extract_codex_final_message(data)
+
+    def _on_review_complete(self, review_text):
+        """Review result received — use shared decision logic to determine next action.
+        
+        Delegates to autofix_logic.decide_autofix_next (mirrors TS autoFixStateMachine).
+        """
+        if not self._running:
+            return
+        
+        self._cancel_stage_timer()
+        self._update_step(2, 'completed', f'第 {self._cycle} 轮评审完成 ✓')
+        self._stage = 'selecting'
+        self._update_step(3, 'active', '正在解析评审结果...')
+        
+        # Dismiss the confirmation card in the Codex Worker tab
+        self._dismiss_confirmation_card()
+        
+        # Use shared decision logic
+        decision = decide_autofix_next(review_text, self._cycle, self._max_cycles, self._scenarios)
+        
+        if decision['action'] == 'stop':
+            reason = decision['reason']
+            if reason == 'no_scenario_match':
+                self._update_step(3, 'error', '未匹配到任何场景触发标记')
+                self._complete(False, f'第 {self._cycle} 轮评审输出未匹配到任何场景触发标记，无法继续')
+            elif reason == 'zero_checkboxes':
+                self._update_step(3, 'error', '未检测到评审清单格式')
+                self._complete(False, f'第 {self._cycle} 轮评审输出格式异常，未找到 checkbox 清单')
+            elif reason == 'max_cycles':
+                remaining = decision.get('remaining_count', '?')
+                self._update_step(3, 'completed', f'仍有 {remaining} 个 P0/P1 问题')
+                self._complete(False, f'已达到最大循环次数 ({self._max_cycles})，仍有 {remaining} 个 P0/P1 问题')
+            return
+        
+        if decision['action'] == 'complete':
+            self._update_step(3, 'completed', '没有 P0/P1 问题 ✓')
+            self._complete(True, f'所有 P0/P1 问题已解决！共 {self._cycle} 轮评审')
+            return
+        
+        # action == 'continue'
+        p0p1_items = decision['items']
+        scenario_key = decision.get('scenario_key')
+        self._update_step(3, 'completed', f'选中 {len(p0p1_items)} 个 P0/P1 问题 ✓')
+        self._update_status(f'第 {self._cycle} 轮：发送 {len(p0p1_items)} 个问题给 Droid 修复...')
+        
+        # Send fix request to Droid
+        self._stage = 'fixing'
+        self._update_step(4, 'active', f'Droid 正在修复 {len(p0p1_items)} 个问题...')
+        
+        # Start stage timeout for fixing
+        self._start_stage_timer('修复')
+        
+        items_text = '\n'.join(f'- {item}' for item in p0p1_items)
+        fix_template = self._resolve_fix_template(scenario_key)
+        fix_message = fix_template.replace('{selected_items}', items_text)
+        
+        # Small delay to let UI update
+        def do_fix():
+            success = self._send_to_droid(fix_message)
+            if not success:
+                self._cancel_stage_timer()
+                self._update_step(4, 'error', '发送修复请求失败')
+                self._complete(False, f'第 {self._cycle} 轮发送修复请求失败，请检查 Droid Worker 状态')
+        threading.Timer(0.3, do_fix).start()
+
+    def _on_fix_complete(self, result_text):
+        """Droid fix complete — check results."""
+        if not self._running:
+            return
+        
+        self._cancel_stage_timer()
+        self._update_step(4, 'completed', f'第 {self._cycle} 轮修复完成 ✓')
+        self._stage = 'checking'
+        self._update_step(5, 'active', '检查修复结果...')
+        self._update_status(f'第 {self._cycle} 轮修复完成，准备下一轮评审...')
+        
+        # Mark step 5 as completed and start next cycle
+        self._update_step(5, 'completed', '准备下一轮 ✓')
+        
+        # Reset steps 2-5 for next cycle after a brief pause
+        def next_cycle():
+            if not self._running:
+                return
+            for i in range(2, 6):
+                self._eval_js(f"""
+                    (function() {{
+                        var step = document.getElementById('step{i}');
+                        step.className = 'step';
+                        var icons = ['⏳', '🔍', '✅', '🔧', '🔄'];
+                        step.querySelector('.step-icon').textContent = icons[{i-1}];
+                    }})()
+                """)
+            self._start_review_cycle()
+        
+        threading.Timer(1.0, next_cycle).start()
+
+    def _complete(self, success, message):
+        """Mark the auto fix loop as complete."""
+        self._cancel_stage_timer()
+        self._running = False
+        self._stage = 'idle'
+        safe_msg = message.replace("'", "\\'")
+        self._eval_js(f"window.complete({'true' if success else 'false'}, '{safe_msg}')")
+        self.coordinator.log('info', 'autofix_complete', f'success={success}, msg={message}')
+        
+        # Notify main webview
+        if self.coordinator.webview:
+            payload = json.dumps({
+                'event': 'autofix-complete',
+                'success': success,
+                'message': message,
+                'cycles': self._cycle,
+                'changeId': self.change_id,
+            }, ensure_ascii=False)
+            b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+            js = f"""
+            if (window.__onAutoFixComplete) {{
+                try {{
+                    var b = atob('{b64}');
+                    var a = new Uint8Array(b.length);
+                    for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                    var text = new TextDecoder('utf-8').decode(a);
+                    window.__onAutoFixComplete(JSON.parse(text));
+                }} catch(e) {{ console.error('[AutoFix] parse error:', e); }}
+            }}
+            """
+            def do_eval():
+                self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+    def stop(self):
+        """Stop the auto fix loop."""
+        if not self._running:
+            return
+        self._cancel_stage_timer()
+        self._running = False
+        self._stage = 'idle'
+        self._update_status('已手动停止')
+        self._eval_js("window.setRunning(false)")
+        self.coordinator.log('info', 'autofix_stopped', f'cycle={self._cycle}')
+
+    def cleanup(self):
+        """Clean up when window is closed."""
+        self._cancel_stage_timer()
+        self._running = False
+        # Don't kill terminals — they're visible tabs managed by the main webview.
+        # User can close them manually if needed.
+        # Remove from coordinator's active autofix windows
+        if hasattr(self.coordinator, '_autofix_windows'):
+            self.coordinator._autofix_windows.discard(self)
 
 
 class WebViewUIDelegate(NSObject):
@@ -1862,6 +2662,13 @@ class AppDelegate(NSObject):
             // Confirmation dialog (opens independent native window, returns Promise)
             showConfirmationDialog: function(data) {
                 return nativeRequest({type: 'showConfirmationDialog', data: data});
+            },
+            
+            // Auto Fix window (opens independent sidebar window)
+            openAutoFixWindow: function(changeId, projectPath) {
+                window.webkit.messageHandlers.nativeBridge.postMessage(
+                    JSON.stringify({type: 'openAutoFixWindow', changeId: changeId, projectPath: projectPath})
+                );
             }
         };
         """

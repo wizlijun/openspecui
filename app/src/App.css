@@ -390,7 +390,6 @@ html, body, #root {
   display: flex;
   gap: 8px;
 }
-}
 
 .panel-empty {
   display: flex;
@@ -542,6 +541,27 @@ button:hover {
 
 .btn-stop:hover {
   background: #ffe0b2;
+}
+
+.btn-autofix {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+
+.btn-autofix:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
 }
 
 /* ─── Dialog (shared) ─────────────────────────────────────────── */

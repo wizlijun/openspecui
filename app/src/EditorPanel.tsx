@@ -29,7 +29,7 @@ export function EditorPanel({ spec, onClose, projectPath }: EditorPanelProps) {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const fileHandle = spec.specHandle ?? spec.handle
   const nativePath = spec.nativePath

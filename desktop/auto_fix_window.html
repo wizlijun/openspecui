@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Self-Review Cycle</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: rgba(255,255,255,0.95);
+            padding: 16px 20px;
+            border-bottom: 2px solid rgba(102,126,234,0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .header h1::before { content: '🔄'; font-size: 20px; }
+        .stop-btn {
+            background: #e74c3c; color: white; border: none;
+            padding: 8px 16px; border-radius: 6px;
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s;
+        }
+        .stop-btn:hover { background: #c0392b; transform: translateY(-1px); box-shadow: 0 4px 8px rgba(231,76,60,0.3); }
+        .stop-btn:disabled { background: #bdc3c7; cursor: not-allowed; transform: none; box-shadow: none; }
+        .content {
+            flex: 1; overflow-y: auto; padding: 24px 20px;
+        }
+        .step {
+            background: rgba(255,255,255,0.95);
+            border-radius: 12px; padding: 16px 20px; margin-bottom: 16px;
+            display: flex; align-items: center; gap: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            transition: all 0.3s; position: relative; overflow: hidden;
+        }
+        .step::before {
+            content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+            width: 4px; background: #bdc3c7; transition: all 0.3s;
+        }
+        .step.active::before { background: #3498db; }
+        .step.completed::before { background: #2ecc71; }
+        .step.error::before { background: #e74c3c; }
+        .step-icon {
+            width: 40px; height: 40px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; flex-shrink: 0;
+            background: #ecf0f1; color: #95a5a6; transition: all 0.3s;
+        }
+        .step.active .step-icon { background: #3498db; color: white; animation: pulse 2s infinite; }
+        .step.completed .step-icon { background: #2ecc71; color: white; }
+        .step.error .step-icon { background: #e74c3c; color: white; }
+        @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+        .step-content { flex: 1; }
+        .step-title { font-size: 15px; font-weight: 600; color: #2c3e50; margin-bottom: 4px; }
+        .step-desc { font-size: 13px; color: #7f8c8d; }
+        .step.active .step-desc { color: #3498db; }
+        .step.completed .step-desc { color: #27ae60; }
+        .step.error .step-desc { color: #e74c3c; }
+        .cycle-counter {
+            background: rgba(255,255,255,0.95);
+            border-radius: 12px; padding: 16px 20px; margin-bottom: 16px;
+            text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .cycle-counter-label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .cycle-counter-value { font-size: 32px; font-weight: 700; color: #667eea; }
+        .footer {
+            background: rgba(255,255,255,0.95);
+            padding: 16px 20px;
+            border-top: 2px solid rgba(102,126,234,0.3);
+            text-align: center; font-size: 12px; color: #7f8c8d;
+        }
+        .spinner {
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid rgba(255,255,255,0.3); border-top-color: white;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Self-Review Cycle</h1>
+        <button class="stop-btn" id="stopBtn" disabled>停止</button>
+    </div>
+    
+    <div class="content">
+        <div class="cycle-counter">
+            <div class="cycle-counter-label">当前循环</div>
+            <div class="cycle-counter-value" id="cycleCounter">1</div>
+        </div>
+        
+        <div class="step" id="step1">
+            <div class="step-icon">⏳</div>
+            <div class="step-content">
+                <div class="step-title">1. 初始化</div>
+                <div class="step-desc">准备 Codex 和 Droid Worker...</div>
+            </div>
+        </div>
+        
+        <div class="step" id="step2">
+            <div class="step-icon">🔍</div>
+            <div class="step-content">
+                <div class="step-title">2. 代码评审</div>
+                <div class="step-desc">Codex Worker 正在评审代码...</div>
+            </div>
+        </div>
+        
+        <div class="step" id="step3">
+            <div class="step-icon">✅</div>
+            <div class="step-content">
+                <div class="step-title">3. 选择问题</div>
+                <div class="step-desc">自动选择所有 P0/P1 问题...</div>
+            </div>
+        </div>
+        
+        <div class="step" id="step4">
+            <div class="step-icon">🔧</div>
+            <div class="step-content">
+                <div class="step-title">4. 修复代码</div>
+                <div class="step-desc">Droid Worker 正在修复问题...</div>
+            </div>
+        </div>
+        
+        <div class="step" id="step5">
+            <div class="step-icon">🔄</div>
+            <div class="step-content">
+                <div class="step-title">5. 检查结果</div>
+                <div class="step-desc">检查是否还有 P0/P1 问题...</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <span id="statusText">等待开始...</span>
+    </div>
+
+    <script>
+        var currentStep = 0, cycleCount = 0, isRunning = false;
+
+        function setStep(n, state, desc) {
+            var s = document.getElementById('step' + n);
+            if (!s) return;
+            s.className = 'step';
+            if (state) s.classList.add(state);
+            var d = s.querySelector('.step-desc');
+            if (desc && d) d.textContent = desc;
+            var icon = s.querySelector('.step-icon');
+            if (state === 'completed') icon.textContent = '✓';
+            else if (state === 'error') icon.textContent = '✗';
+            else if (state === 'active') icon.innerHTML = '<span class="spinner"></span>';
+        }
+
+        window.updateStep = function(n, state, desc) { setStep(n, state, desc); currentStep = n; };
+        window.updateCycle = function(c) { cycleCount = c; document.getElementById('cycleCounter').textContent = c; };
+        window.updateStatus = function(t) { document.getElementById('statusText').textContent = t; };
+        window.setRunning = function(r) {
+            isRunning = r;
+            document.getElementById('stopBtn').disabled = !r;
+        };
+        window.complete = function(ok, msg) {
+            isRunning = false;
+            document.getElementById('stopBtn').disabled = true;
+            if (ok) {
+                window.updateStatus('🎉 ' + msg);
+                for (var i = 1; i <= 5; i++) setStep(i, 'completed', '');
+            } else {
+                window.updateStatus('⚠️ ' + msg);
+            }
+        };
+        window.resetSteps = function() {
+            var icons = ['⏳', '🔍', '✅', '🔧', '🔄'];
+            for (var i = 1; i <= 5; i++) {
+                var s = document.getElementById('step' + i);
+                s.className = 'step';
+                s.querySelector('.step-icon').textContent = icons[i - 1];
+            }
+        };
+
+        document.getElementById('stopBtn').addEventListener('click', function() {
+            if (window.webkit && window.webkit.messageHandlers.autoFixBridge) {
+                window.webkit.messageHandlers.autoFixBridge.postMessage(JSON.stringify({type: 'stop'}));
+            }
+        });
+
+        window.updateStatus('等待开始...');
+    </script>
+</body>
+</html>

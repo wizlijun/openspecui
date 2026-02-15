@@ -15,9 +15,9 @@ export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> =
   code_review: {
     mode: 'code_review',
     name: 'Code Review',
-    autoInitPrompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。changeId为{changeId}。',
+    autoInitPrompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]。changeId为{changeId}。',
     leftButtons: [
-      { label: 'Review', prompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。' },
+      { label: 'Review', prompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]' },
       { label: 'Fix', promptTemplate: '根据评审建议修复以下问题：{input}', requiresInput: true },
     ],
     rightButtons: [],

@@ -1,3 +1,25 @@
+// ─── File System Access API Type Declarations ──────────────────────
+
+interface FileSystemDirectoryEntry extends FileSystemDirectoryHandle {
+  kind: 'directory'
+}
+
+interface FileSystemFileEntry extends FileSystemFileHandle {
+  kind: 'file'
+}
+
+declare global {
+  interface Window {
+    showDirectoryPicker(): Promise<FileSystemDirectoryHandle>
+  }
+
+  interface FileSystemDirectoryHandle {
+    values(): AsyncIterableIterator<FileSystemDirectoryEntry | FileSystemFileEntry>
+  }
+}
+
+// ─── File Tree Types ───────────────────────────────────────────────
+
 export interface FileTreeNode {
   name: string
   kind: 'directory' | 'file'
@@ -27,7 +49,12 @@ declare global {
     __onTerminalOutput?: (data: string) => void
     __onTerminalOutputBytes?: (base64Data: string) => void
     __onHookNotify?: (data: any) => void
+    __onCreateAutoFixWorkers?: (data: any) => void
+    __onDismissConfirmationCard?: (data: any) => void
+    __onAutoFixSendToWorker?: (data: any) => void
+    __onAutoFixComplete?: (data: any) => void
     __onCommandCallback?: (callbackId: string, output: string) => void
+    __commandCallbackMap?: Record<string, (callbackId: string, output: string) => void>
     __onReviewCommandCallback?: (callbackId: string, output: string) => void
     __nativeBridge?: {
       pickDirectory: () => Promise<{ success: boolean; path?: string; error?: string }>
@@ -52,6 +79,8 @@ declare global {
       untrackChangeSession: (tabId: string) => void
       trackCodexSession: (tabId: string, sessionId: string, changeId?: string | null) => void
       untrackCodexSession: (tabId: string) => void
+      // Auto Fix window
+      openAutoFixWindow: (changeId: string, projectPath: string) => void
     }
     __onReviewTerminalOutput?: (data: string) => void
     __onReviewTerminalOutputBytes?: (base64Data: string) => void
@@ -61,6 +90,7 @@ declare global {
     __onChangeCommandCallback?: Record<string, (callbackId: string, output: string) => void>
     __onChangeTerminalExit?: Record<string, (code: number) => void>
     __closingTabs?: Set<string>
+    __workerStates?: Record<string, any>
     webkit?: {
       messageHandlers?: {
         terminalInput?: { postMessage: (data: string) => void }
@@ -76,6 +106,34 @@ interface NativeDirEntry {
   kind: 'directory' | 'file'
   path: string
   entries?: NativeDirEntry[]
+}
+
+// ─── Command Callback Management ───────────────────────────────────
+
+// Initialize callback map and dispatcher on window
+if (typeof window !== 'undefined' && !window.__commandCallbackMap) {
+  window.__commandCallbackMap = {}
+  window.__onCommandCallback = (callbackId: string, output: string) => {
+    const cbMap = window.__commandCallbackMap
+    const handler = cbMap?.[callbackId]
+    if (handler && cbMap) {
+      delete cbMap[callbackId]
+      handler(callbackId, output)
+    }
+  }
+}
+
+export function registerCommandCallback(callbackId: string, handler: (callbackId: string, output: string) => void): void {
+  const callbackMap = window.__commandCallbackMap
+  if (callbackMap) {
+    callbackMap[callbackId] = handler
+  }
+}
+
+export function unregisterCommandCallback(callbackId: string): void {
+  if (window.__commandCallbackMap) {
+    delete window.__commandCallbackMap[callbackId]
+  }
 }
 
 // ─── Native App Implementation ─────────────────────────────────────
@@ -104,13 +162,11 @@ async function nativePickDirectory(existingPath?: string): Promise<FileTreeNode>
   }
 
   // Look for openspec/ subdirectory first, fall back to root
-  let openspecPath = rootPath
   let openspecEntries = dirResult.data.entries || []
   const openspecDir = openspecEntries.find(e => e.kind === 'directory' && e.name === 'openspec')
   if (openspecDir) {
     const openspecResult = await bridge.readDirectory(openspecDir.path)
     if (openspecResult.success && openspecResult.data) {
-      openspecPath = openspecDir.path
       openspecEntries = openspecResult.data.entries || []
     }
   }
@@ -469,6 +525,29 @@ export async function nativeReadFile(path: string): Promise<string> {
 
 export async function nativeWriteFile(path: string, content: string): Promise<void> {
   if (!window.__nativeBridge) throw new Error('Native bridge not available')
+  
+  // Ensure parent directory exists
+  const lastSlash = path.lastIndexOf('/')
+  if (lastSlash > 0) {
+    const dir = path.substring(0, lastSlash)
+    await new Promise<void>((resolve, reject) => {
+      const callbackId = `mkdir-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      const timer = setTimeout(() => {
+        unregisterCommandCallback(callbackId)
+        reject(new Error('mkdir timeout'))
+      }, 3000)
+      registerCommandCallback(callbackId, () => {
+        clearTimeout(timer)
+        resolve()
+      })
+      window.__nativeBridge!.runCommandWithCallback(
+        `mkdir -p '${dir.replace(/'/g, "'\\''")}'`,
+        callbackId,
+        'shell'
+      )
+    })
+  }
+  
   const result = await window.__nativeBridge.writeFile(path, content)
   if (!result.success) throw new Error(result.error || 'Failed to write file')
 }

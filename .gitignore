@@ -1,6 +1,11 @@
 # OS
 .DS_Store
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Ignore all dot-prefixed directories
 .*/
 

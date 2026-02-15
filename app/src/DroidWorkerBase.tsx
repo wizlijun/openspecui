@@ -55,12 +55,16 @@ export interface DroidWorkerBaseProps {
   onBusyChange?: (busy: boolean) => void
   /** Called when "Review" action button is clicked */
   onReviewAction?: (changeId: string) => void
-  /** Ref for external message injection (used by App for Droid Fix from Codex Worker) */
-  onSendMessageRef?: React.MutableRefObject<((message: string) => void) | null>
+  /** Ref for external message injection (used by App for Droid Fix from Codex Worker). Returns true if sent successfully. */
+  onSendMessageRef?: React.MutableRefObject<((message: string) => boolean) | null>
   /** Auto-send this message after Droid Worker is initialized (for fix_review mode) */
   autoSendMessage?: string
   /** Confirmation card config loaded from .openspec/confirmation_card.yml */
   confirmationCardConfig?: ConfirmationCardConfig
+  /** Called when Droid Worker completes a fix task (used by App for Auto Fix loop) */
+  onFixComplete?: (droidWorkerId: string) => void
+  /** Called when autoSendMessage is successfully sent (used by App to activate deferred Auto Fix) */
+  onAutoSendComplete?: (droidWorkerId: string) => void
 }
 
 // ─── Component ─────────────────────────────────────────────────────
@@ -69,18 +73,42 @@ export function DroidWorkerBase({
   tabId, changeId, resumeSessionId, projectPath, config,
   onStopHookRef, onRefresh, resetKey, sessionIdRef, onSessionId, onBusyChange,
   onReviewAction, onSendMessageRef, autoSendMessage, confirmationCardConfig,
+  onFixComplete, onAutoSendComplete,
 }: DroidWorkerBaseProps) {
+  // ─── HMR State Persistence ─────────────────────────────────────────
+  // Store worker state in window to survive HMR unmount/remount
+  if (!window.__workerStates) window.__workerStates = {}
+  const savedState = window.__workerStates[tabId]
+  
   const [message, setMessage] = useState('')
-  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
-  const [waiting, setWaiting] = useState(false)
-  const [initialized, setInitialized] = useState(false)
-  const [showInitButton, setShowInitButton] = useState(true)
+  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>(
+    savedState?.history || []
+  )
+  const [waiting, setWaiting] = useState(savedState?.waiting || false)
+  const [initialized, setInitialized] = useState(savedState?.initialized || false)
+  const [showInitButton, setShowInitButton] = useState(savedState?.showInitButton ?? true)
   const [confirmationData, setConfirmationData] = useState<{ text: string; scenarioKey: string } | null>(null)
-  const initializedRef = useRef(false)
-  const initCalledRef = useRef(false)
-  const autoPromptSentRef = useRef(false)
-  const autoSendMessageSentRef = useRef(false)
+  const initializedRef = useRef(savedState?.initializedRef || false)
+  const initCalledRef = useRef(savedState?.initCalledRef || false)
+  const autoPromptSentRef = useRef(savedState?.autoPromptSentRef || false)
+  const autoSendMessageSentRef = useRef(savedState?.autoSendMessageSentRef || false)
   const resultRef = useRef<HTMLDivElement>(null)
+  
+  // Save state to window on every change (for HMR recovery)
+  useEffect(() => {
+    if (window.__workerStates) {
+      window.__workerStates[tabId] = {
+        history,
+        waiting,
+        initialized,
+        showInitButton,
+        initializedRef: initializedRef.current,
+        initCalledRef: initCalledRef.current,
+        autoPromptSentRef: autoPromptSentRef.current,
+        autoSendMessageSentRef: autoSendMessageSentRef.current,
+      }
+    }
+  }, [tabId, history, waiting, initialized, showInitButton])
 
   const onRefreshRef = useRef(onRefresh)
   onRefreshRef.current = onRefresh
@@ -98,6 +126,16 @@ export function DroidWorkerBase({
   sessionIdRefStable.current = sessionIdRef
   const onReviewActionRef = useRef(onReviewAction)
   onReviewActionRef.current = onReviewAction
+  const onFixCompleteRef = useRef(onFixComplete)
+  onFixCompleteRef.current = onFixComplete
+  const onAutoSendCompleteRef = useRef(onAutoSendComplete)
+  onAutoSendCompleteRef.current = onAutoSendComplete
+  // Track waiting state via ref for reliable access inside hook closures
+  const waitingRef = useRef(false)
+  // Unique task ID per submitted message — used to correlate Stop events with
+  // the task that triggered them, preventing spurious onFixComplete calls from
+  // manual Stop or timing jitter.
+  const taskIdRef = useRef<string | null>(null)
 
   const bridge = window.__nativeBridge
 
@@ -115,6 +153,7 @@ export function DroidWorkerBase({
       initCalledRef.current = false
       autoPromptSentRef.current = false
       autoSendMessageSentRef.current = false
+      taskIdRef.current = null
       sessionIdRefStable.current.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,6 +168,7 @@ export function DroidWorkerBase({
 
   // Busy state
   useEffect(() => {
+    waitingRef.current = waiting
     onBusyChangeRef.current?.(waiting)
   }, [waiting])
 
@@ -138,11 +178,14 @@ export function DroidWorkerBase({
 
       if (eventName === 'SessionStart') {
         if (initializedRef.current) return
-        if (data.session_id) {
-          sessionIdRefStable.current.current = data.session_id
-          if (onSessionIdRef.current) onSessionIdRef.current(data.session_id)
-          if (bridge) bridge.trackChangeSession(tabId, data.session_id, changeId)
+        if (!data.session_id) {
+          // No session_id — cannot safely bind; wait for a proper SessionStart
+          console.warn(`[DroidWorkerBase:${tabId}] SessionStart without session_id, ignoring`)
+          return
         }
+        sessionIdRefStable.current.current = data.session_id
+        if (onSessionIdRef.current) onSessionIdRef.current(data.session_id)
+        if (bridge) bridge.trackChangeSession(tabId, data.session_id, changeId)
         initializedRef.current = true
         setInitialized(true)
         setWaiting(false)
@@ -158,8 +201,22 @@ export function DroidWorkerBase({
 
         const result = data.last_result || '(no response)'
         setHistory(prev => [...prev, { role: 'assistant', text: result }])
+
+        // Capture task ID and waiting state before resetting, then synchronously
+        // clear both refs so duplicate Stop events are no-ops.
+        const wasWaiting = waitingRef.current
+        const completedTaskId = taskIdRef.current
+        waitingRef.current = false
+        taskIdRef.current = null
         setWaiting(false)
-        
+
+        // Only notify App of fix completion if:
+        // 1. Droid was actually processing a task (wasWaiting)
+        // 2. There was a valid task ID (rules out manual Stop which clears taskIdRef)
+        if (wasWaiting && completedTaskId && onFixCompleteRef.current) {
+          onFixCompleteRef.current(tabId)
+        }
+
         // Detect scenario from config triggers (use ref to avoid stale closure)
         if (config.confirmation?.enabled !== false && confirmationCardConfigRef.current) {
           const scenarioKey = detectScenario(result, confirmationCardConfigRef.current)
@@ -167,7 +224,7 @@ export function DroidWorkerBase({
             setConfirmationData({ text: result, scenarioKey })
           }
         }
-        
+
         if (onRefreshRef.current) onRefreshRef.current()
         return
       }
@@ -182,8 +239,12 @@ export function DroidWorkerBase({
   }, [bridge, tabId])
 
   const sendToDroid = useCallback((text: string) => {
-    writeToTerminal(text)
-    setTimeout(() => writeToTerminal('\r'), 200)
+    // Use bracketed paste mode so the terminal treats the entire text as a single paste
+    writeToTerminal(`\x1b[200~${text}\x1b[201~`)
+    // Send Enter to submit the pasted content
+    setTimeout(() => writeToTerminal('\r'), 100)
+    // Send a second Enter to confirm execution
+    setTimeout(() => writeToTerminal('\r'), 300)
   }, [writeToTerminal])
 
   // Register sendMessage function for external injection (Droid Fix from Codex Worker)
@@ -192,18 +253,20 @@ export function DroidWorkerBase({
   useEffect(() => {
     const ref = onSendMessageRefStable.current
     if (ref) {
-      ref.current = (msg: string) => {
-        if (!initializedRef.current || !sessionIdRef.current) {
-          console.warn(`[DroidWorkerBase:${tabId}] sendMessage rejected — Droid not ready (initialized=${initializedRef.current}, session=${sessionIdRef.current})`)
+      ref.current = (msg: string): boolean => {
+        if (!initializedRef.current || !sessionIdRefStable.current.current) {
+          console.warn(`[DroidWorkerBase:${tabId}] sendMessage rejected — Droid not ready (initialized=${initializedRef.current}, session=${sessionIdRefStable.current.current || 'none'})`)
           alert('Droid Worker 尚未就绪，请稍后重试')
-          return
+          return false
         }
         setHistory(prev => [...prev, { role: 'user', text: msg }])
+        taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
         setWaiting(true)
         if (projectPath) {
           saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, msg, `Droid Worker > External Fix`).catch(() => {})
         }
         sendToDroid(msg)
+        return true
       }
     }
     return () => {
@@ -230,7 +293,7 @@ export function DroidWorkerBase({
 
     const isResumeMode = !!resumeSessionId
     const initMsg = isResumeMode
-      ? `[Init] Resuming session ${resumeSessionId.slice(0, 8)}...`
+      ? `[Init] Resuming session ...${resumeSessionId.slice(-8)}`
       : '[Init] Starting terminal → cd → droid'
 
     setHistory(prev => [...prev, { role: 'user', text: initMsg }])
@@ -284,14 +347,11 @@ export function DroidWorkerBase({
   // Cleanup — deps are intentionally empty: tabId is stable for the lifetime of the component,
   // and bridge is a global singleton. This ensures cleanup runs only on unmount.
   useEffect(() => {
-    console.log(`[DroidWorker:${tabId}] ✅ MOUNTED`)
+    console.log(`[DroidWorker:${tabId}] ✅ MOUNTED, changeId=${changeId}, resumeSessionId=${resumeSessionId}`)
     abortedRef.current = false  // Reset on mount (important for HMR)
     return () => {
-      // Only kill terminal if the tab is being explicitly closed by the user.
-      // During Vite HMR, components unmount/remount but the tab is not closing —
-      // killing the terminal would disrupt running processes.
       const isClosing = window.__closingTabs?.has(tabId)
-      console.warn(`[DroidWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}`, new Error('unmount stack'))
+      console.warn(`[DroidWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}, closingTabs=${JSON.stringify([...(window.__closingTabs || [])])}`)
       abortedRef.current = true
       if (isClosing) {
         const b = window.__nativeBridge
@@ -307,6 +367,8 @@ export function DroidWorkerBase({
         if (window.__onChangeCommandCallback) delete window.__onChangeCommandCallback[tabId]
         if (window.__onChangeTerminalExit) delete window.__onChangeTerminalExit[tabId]
         if (window.__onChangeTerminalOutputBytes) delete window.__onChangeTerminalOutputBytes[tabId]
+        // Clean up HMR state persistence
+        if (window.__workerStates) delete window.__workerStates[tabId]
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -334,6 +396,7 @@ export function DroidWorkerBase({
     autoPromptSentRef.current = true
     const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
     setHistory(prev => [...prev, { role: 'user', text: prompt }])
+    taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setWaiting(true)
     if (projectPath) {
       saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, prompt, `Droid Worker (${changeId}) > Auto-init prompt`).catch(() => {})
@@ -350,12 +413,42 @@ export function DroidWorkerBase({
 
     autoSendMessageSentRef.current = true
     setHistory(prev => [...prev, { role: 'user', text: autoSendMessage }])
+    taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setWaiting(true)
     if (projectPath) {
       saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, autoSendMessage, `Droid Worker > Auto Fix Message`).catch(() => {})
     }
     sendToDroid(autoSendMessage)
-  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, changeId, projectPath, sendToDroid])
+    // Notify App that auto-send succeeded (activates deferred Auto Fix)
+    if (onAutoSendCompleteRef.current) {
+      onAutoSendCompleteRef.current(tabId)
+    }
+  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, changeId, projectPath, sendToDroid, tabId])
+
+  // ─── Confirmation handlers ───────────────────────────────────────
+  // NOTE: useCallback must be declared before the early return to maintain
+  // consistent hook call order across renders (Rules of Hooks).
+
+  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
+    if (action === 'cancel') {
+      setConfirmationData(null)
+      return
+    }
+
+    // In Droid Worker, all fix actions send to current Droid
+    const template = button.messageTemplate || config.confirmation?.responseTemplate || '根据评审建议修复以下问题：\n{selected_items}'
+    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
+    const fixMessage = template.replace('{selected_items}', itemsText)
+
+    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
+    setConfirmationData(null)
+    taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    setWaiting(true)
+    if (projectPath) {
+      saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, fixMessage, `Droid Worker > ${button.label}`).catch(() => {})
+    }
+    sendToDroid(fixMessage)
+  }, [config.confirmation?.responseTemplate, changeId, projectPath, sendToDroid])
 
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
 
@@ -366,6 +459,7 @@ export function DroidWorkerBase({
     if (!trimmed) return
     setHistory(prev => [...prev, { role: 'user', text: trimmed }])
     setMessage('')
+    taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setWaiting(true)
     if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, trimmed, `Droid Worker (${changeId || 'idle'}) > Send`).catch(() => {})
     sendToDroid(trimmed)
@@ -373,7 +467,11 @@ export function DroidWorkerBase({
 
   const handleStop = () => {
     writeToTerminal('\x03')
+    // Clear taskIdRef BEFORE clearing waiting — ensures the Stop hook handler
+    // sees no valid task ID and won't call onFixComplete for a manual abort.
+    taskIdRef.current = null
     setWaiting(false)
+    waitingRef.current = false
     setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
   }
 
@@ -391,6 +489,7 @@ export function DroidWorkerBase({
     // Fixed prompt
     if (btn.prompt) {
       setHistory(prev => [...prev, { role: 'user', text: btn.prompt! }])
+      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, btn.prompt!, `Droid Worker > ${btn.label}`).catch(() => {})
       sendToDroid(btn.prompt!)
@@ -404,6 +503,7 @@ export function DroidWorkerBase({
       const prompt = btn.promptTemplate.replace('{input}', trimmed)
       setHistory(prev => [...prev, { role: 'user', text: prompt }])
       setMessage('')
+      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, prompt, `Droid Worker > ${btn.label}`).catch(() => {})
       sendToDroid(prompt)
@@ -416,28 +516,6 @@ export function DroidWorkerBase({
       if (initialized) handleSendMessage()
     }
   }
-
-  // ─── Confirmation handlers ───────────────────────────────────────
-
-  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
-    if (action === 'cancel') {
-      setConfirmationData(null)
-      return
-    }
-
-    // In Droid Worker, all fix actions send to current Droid
-    const template = button.messageTemplate || config.confirmation?.responseTemplate || '根据评审建议修复以下问题：\n{selected_items}'
-    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
-    const fixMessage = template.replace('{selected_items}', itemsText)
-
-    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
-    setConfirmationData(null)
-    setWaiting(true)
-    if (projectPath) {
-      saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, fixMessage, `Droid Worker > ${button.label}`).catch(() => {})
-    }
-    sendToDroid(fixMessage)
-  }, [config.confirmation?.responseTemplate, changeId, projectPath, sendToDroid])
 
   // ─── Render ──────────────────────────────────────────────────────
 
