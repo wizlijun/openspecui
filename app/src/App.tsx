@@ -120,7 +120,7 @@ function App() {
   // Auto Fix loop state: tracks which Codex Workers are in Auto Fix mode
   const [autoFixActiveMap, setAutoFixActiveMap] = useState<Map<string, { active: boolean; cycleCount: number; stage: 'fixing' | 'reviewing' }>>(new Map())
   // Refs for triggering re-review on Codex Workers (set by CodexWorkerBase)
-  const codexTriggerReReviewRefs = useRef<Map<string, (() => void) | null>>(new Map())
+  const codexTriggerReReviewRefs = useRef<Map<string, (() => boolean) | null>>(new Map())
   // Refs for pushing status messages to Codex Worker history (set by CodexWorkerBase)
   const codexPushHistoryRefs = useRef<Map<string, ((msg: string) => void) | null>>(new Map())
   // Refs for dismissing confirmation cards on Codex Workers (set by CodexWorkerBase)
@@ -465,6 +465,11 @@ function App() {
       setChangeResetKeys(prev => new Map(prev).set(droidTabId, 0))
       setActiveChangeTabId(droidTabId)
 
+      // CRITICAL: Establish bidirectional binding so __onAutoFixDroidFix can find the Droid worker
+      codexToDroidRef.current.set(codexTabId, droidTabId)
+      droidToCodexRef.current.set(droidTabId, codexTabId)
+      console.log(`[WorkerBinding] Codex ${codexTabId} ↔ Droid ${droidTabId} (AutoFix created)`)
+
       // Switch to Codex tab to show it
       setActiveTab('codex')
     }
@@ -552,6 +557,40 @@ function App() {
 
     return () => {
       window.__onAutoFixSendToWorker = undefined
+    }
+  }, [])
+
+  // ─── Self-Review Cycle: Trigger Re-Review via Button ─────────────
+  // Called by the native Self-Review Cycle window to simulate clicking "Review Again" button
+  useEffect(() => {
+    if (!window.__isNativeApp) return
+
+    window.__onAutoFixTriggerReReview = (data: any) => {
+      const { tabId } = data
+      console.log(`[SelfReviewCycle] Trigger re-review for Codex tab ${tabId}`)
+      const triggerReReview = codexTriggerReReviewRefs.current.get(tabId)
+      let success = false
+      if (triggerReReview) {
+        success = triggerReReview()
+      }
+      if (!success) {
+        console.warn(`[SelfReviewCycle] triggerReReview failed for Codex tab ${tabId} (ref=${!!triggerReReview})`)
+        // Notify Python of failure so it can abort immediately instead of waiting for 300s timeout
+        try {
+          const handler = window.webkit?.messageHandlers?.nativeBridge
+          if (handler) {
+            handler.postMessage(JSON.stringify({
+              type: 'autoFixSendFailed', workerType: 'codex', tabId,
+            }))
+          }
+        } catch (e) {
+          console.error('[SelfReviewCycle] Failed to notify Python of trigger failure:', e)
+        }
+      }
+    }
+
+    return () => {
+      window.__onAutoFixTriggerReReview = undefined
     }
   }, [])
 
@@ -720,7 +759,7 @@ function App() {
     setActiveTab('codex')
   }
 
-  const handleDroidFixRequest = useCallback((selectedItems: string[], codexWorkerId: string, isAutoFix?: boolean, targetCycleCount?: number, scenarioKey?: string) => {
+  const handleDroidFixRequest = useCallback((selectedItems: string[], codexWorkerId: string, isAutoFix?: boolean, targetCycleCount?: number, scenarioKey?: string, onSendFailed?: () => void, explicitDroidTabId?: string) => {
     // Task 4.2: Save review entry before sending fix (filename auto-generated from date + git hash)
     if (tree?.nativePath) {
       saveReviewEntry(tree.nativePath, selectedItems).catch(err => {
@@ -730,7 +769,7 @@ function App() {
 
     // Build fix message — use the matched scenario's button template when scenarioKey is provided
     const targetAction = isAutoFix ? 'auto_fix' : 'droid_fix'
-    let template = '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
+    let template: string | undefined
 
     // If scenarioKey is provided (from Auto Fix state machine), look up that specific scenario first
     const scenariosToSearch = scenarioKey && confirmationCardConfig.scenarios[scenarioKey]
@@ -738,19 +777,54 @@ function App() {
       : Object.values(confirmationCardConfig.scenarios)
 
     for (const scenario of scenariosToSearch) {
+      // 1. Exact match on the primary action (auto_fix or droid_fix)
       const exactBtn = scenario.buttons.find(b => b.action === targetAction && b.messageTemplate)
-      const fallbackBtn = scenario.buttons.find(b => b.target === 'droid_worker' && b.messageTemplate)
-      const btn = exactBtn || fallbackBtn
+      // 2. Cross-match: if primary not found, try the sibling action (auto_fix ↔ droid_fix)
+      const siblingAction = isAutoFix ? 'droid_fix' : 'auto_fix'
+      const siblingBtn = scenario.buttons.find(b => b.action === siblingAction && b.messageTemplate)
+      // 3. Fallback: any button targeting droid_worker or current with a template
+      const fallbackBtn = scenario.buttons.find(b => (b.target === 'droid_worker' || b.target === 'current') && b.messageTemplate)
+      const btn = exactBtn || siblingBtn || fallbackBtn
       if (btn?.messageTemplate) {
         template = btn.messageTemplate
         break
       }
     }
+    
+    if (!template) {
+      console.error('[App] No message template found for Droid fix request')
+      // Report failure to Python if this is an AutoFix call
+      if (isAutoFix) {
+        try {
+          const handler = window.webkit?.messageHandlers?.nativeBridge
+          if (handler) {
+            handler.postMessage(JSON.stringify({
+              type: 'autoFixSendFailed',
+              workerType: 'droid',
+              tabId: codexToDroidRef.current.get(codexWorkerId) || codexWorkerId,
+            }))
+          }
+        } catch (e) {
+          console.error('[DroidFixRequest] Failed to notify Python of template missing:', e)
+        }
+      }
+      alert('配置错误：未找到修复消息模板，请检查 confirmation_card.yml')
+      onSendFailed?.()
+      return
+    }
+    
     const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
     const fixMessage = template.replace('{selected_items}', itemsText)
 
-    // Find bound Droid Worker by workerId
-    let droidWorkerId = codexToDroidRef.current.get(codexWorkerId)
+    // Find bound Droid Worker by workerId — prefer explicit ID from caller (e.g., Python Self-Review Cycle)
+    let droidWorkerId = explicitDroidTabId || codexToDroidRef.current.get(codexWorkerId)
+
+    // If explicit ID was provided but binding is stale, re-establish it
+    if (explicitDroidTabId && !codexToDroidRef.current.get(codexWorkerId)) {
+      codexToDroidRef.current.set(codexWorkerId, explicitDroidTabId)
+      droidToCodexRef.current.set(explicitDroidTabId, codexWorkerId)
+      console.log(`[WorkerBinding] Codex ${codexWorkerId} ↔ Droid ${explicitDroidTabId} (re-established from caller)`)
+    }
 
     if (!droidWorkerId) {
       // No bound Droid Worker → create a fix_review mode Droid Worker
@@ -811,6 +885,8 @@ function App() {
             if (pushHistory) pushHistory(`⚠ Auto Fix 停止：发送修复消息失败，请手动重试。`)
             alert('Auto Fix 停止：发送修复消息失败，请手动重试。')
           }
+          // Notify caller (e.g., Self-Review Cycle) of send failure
+          onSendFailed?.()
         }
       } else if (retries < maxRetries) {
         retries++
@@ -823,11 +899,104 @@ function App() {
           if (pushHistory) pushHistory(`⚠ Auto Fix 停止：Droid Worker 尚未就绪。`)
         }
         alert('Droid Worker 尚未就绪，请稍后重试')
+        // Notify caller (e.g., Self-Review Cycle) of send failure
+        onSendFailed?.()
       }
     }
     // Defer to next tick so React can flush state updates first
     setTimeout(trySend, 50)
   }, [codexTabs, confirmationCardConfig, tree?.nativePath])
+
+  // ─── Self-Review Cycle: Trigger Droid Fix via Frontend ────────────
+  // Called by the native Self-Review Cycle window to invoke handleDroidFixRequest
+  useEffect(() => {
+    if (!window.__isNativeApp) return
+
+    window.__onAutoFixDroidFix = (data: any) => {
+      const { codexTabId, droidTabId, items, scenarioKey } = data
+      
+      // Validate items is an array before accessing .length
+      if (!Array.isArray(items)) {
+        console.error('[SelfReviewCycle] Invalid items data (not an array) — reporting failure to Python')
+        try {
+          const handler = window.webkit?.messageHandlers?.nativeBridge
+          if (handler) {
+            handler.postMessage(JSON.stringify({
+              type: 'autoFixSendFailed',
+              workerType: 'droid',
+              tabId: droidTabId || codexToDroidRef.current.get(codexTabId) || '',
+            }))
+          }
+        } catch (e) {
+          console.error('[SelfReviewCycle] Failed to notify Python of invalid items:', e)
+        }
+        return
+      }
+      
+      console.log(`[SelfReviewCycle] Trigger Droid fix for Codex tab ${codexTabId}, ${items.length} items`)
+
+      // Resolve droid tab ID: prefer explicit from Python, fallback to binding ref
+      const resolvedDroidTabId = droidTabId || codexToDroidRef.current.get(codexTabId) || ''
+
+      // Pre-check: verify message template exists before entering handleDroidFixRequest
+      // If template is missing, handleDroidFixRequest returns early with alert but Python never learns
+      // Search for both 'droid_fix' and 'auto_fix' actions — the user may only configure
+      // auto_fix (target: current) without a separate droid_fix button.
+      // handleDroidFixRequest uses isAutoFix=false here so its targetAction is 'droid_fix',
+      // but we widen the pre-check to avoid false negatives.
+      let hasTemplate = false
+      const scenariosToSearch = scenarioKey && confirmationCardConfig.scenarios[scenarioKey]
+        ? [confirmationCardConfig.scenarios[scenarioKey]]
+        : Object.values(confirmationCardConfig.scenarios)
+      for (const scenario of scenariosToSearch) {
+        const droidFixBtn = scenario.buttons.find((b: any) => b.action === 'droid_fix' && b.messageTemplate)
+        const autoFixBtn = scenario.buttons.find((b: any) => b.action === 'auto_fix' && b.messageTemplate)
+        const fallbackBtn = scenario.buttons.find((b: any) => (b.target === 'droid_worker' || b.target === 'current') && b.messageTemplate)
+        if (droidFixBtn || autoFixBtn || fallbackBtn) { hasTemplate = true; break }
+      }
+
+      if (!hasTemplate) {
+        console.error('[SelfReviewCycle] No message template found — reporting failure to Python')
+        try {
+          const handler = window.webkit?.messageHandlers?.nativeBridge
+          if (handler) {
+            handler.postMessage(JSON.stringify({
+              type: 'autoFixSendFailed',
+              workerType: 'droid',
+              tabId: resolvedDroidTabId,
+            }))
+          }
+        } catch (e) {
+          console.error('[SelfReviewCycle] Failed to notify Python of template missing:', e)
+        }
+        return
+      }
+
+      // CRITICAL: isAutoFix=false — Python's Self-Review Cycle manages the loop.
+      // Passing true would activate the frontend's independent Auto Fix state machine,
+      // causing duplicate Review/Fix commands from two competing drivers.
+      // Pass onSendFailed callback so Python is notified immediately on failure.
+      const notifyPythonFailed = () => {
+        try {
+          const handler = window.webkit?.messageHandlers?.nativeBridge
+          if (handler) {
+            handler.postMessage(JSON.stringify({
+              type: 'autoFixSendFailed',
+              workerType: 'droid',
+              tabId: resolvedDroidTabId,
+            }))
+          }
+        } catch (e) {
+          console.error('[SelfReviewCycle] Failed to notify Python of droid fix send failure:', e)
+        }
+      }
+      handleDroidFixRequest(items, codexTabId, false, undefined, scenarioKey, notifyPythonFailed, resolvedDroidTabId || undefined)
+    }
+
+    return () => {
+      window.__onAutoFixDroidFix = undefined
+    }
+  }, [handleDroidFixRequest, confirmationCardConfig])
 
   // ─── Auto Fix Loop Callbacks ─────────────────────────────────────
 
@@ -853,9 +1022,19 @@ function App() {
     // Trigger re-review on the bound Codex Worker
     const triggerReReview = codexTriggerReReviewRefs.current.get(codexWorkerId)
     if (triggerReReview) {
-      triggerReReview()
+      const success = triggerReReview()
+      if (!success) {
+        console.warn(`[AutoFix] triggerReReview returned false for Codex ${codexWorkerId}`)
+        // Revert stage and stop Auto Fix
+        setAutoFixActiveMap(prev => { const m = new Map(prev); m.delete(codexWorkerId); return m })
+        const pushHistory = codexPushHistoryRefs.current.get(codexWorkerId)
+        if (pushHistory) pushHistory(`⚠ Auto Fix 停止：触发重新评审失败（Worker 未初始化或按钮缺失）。`)
+      }
     } else {
       console.warn(`[AutoFix] No triggerReReview ref for Codex ${codexWorkerId}`)
+      setAutoFixActiveMap(prev => { const m = new Map(prev); m.delete(codexWorkerId); return m })
+      const pushHistory = codexPushHistoryRefs.current.get(codexWorkerId)
+      if (pushHistory) pushHistory(`⚠ Auto Fix 停止：Codex Worker 引用丢失。`)
     }
   }, [autoFixActiveMap])
 

@@ -93,6 +93,8 @@ export function DroidWorkerBase({
   const autoPromptSentRef = useRef(savedState?.autoPromptSentRef || false)
   const autoSendMessageSentRef = useRef(savedState?.autoSendMessageSentRef || false)
   const resultRef = useRef<HTMLDivElement>(null)
+  const handleSendMessageRef = useRef<(() => void) | null>(null)
+  const pendingMessageRef = useRef<string | null>(null)  // Store message to send, avoiding closure issues
   
   // Save state to window on every change (for HMR recovery)
   useEffect(() => {
@@ -250,6 +252,8 @@ export function DroidWorkerBase({
   // Register sendMessage function for external injection (Droid Fix from Codex Worker)
   // Guard: only send when Droid is initialized and has a session, otherwise the
   // command would fall through to the raw shell instead of the Droid REPL.
+  // Instead of sending directly, paste into input box and trigger send via UI path.
+
   useEffect(() => {
     const ref = onSendMessageRefStable.current
     if (ref) {
@@ -259,13 +263,14 @@ export function DroidWorkerBase({
           alert('Droid Worker 尚未就绪，请稍后重试')
           return false
         }
-        setHistory(prev => [...prev, { role: 'user', text: msg }])
-        taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-        setWaiting(true)
-        if (projectPath) {
-          saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, msg, `Droid Worker > External Fix`).catch(() => {})
-        }
-        sendToDroid(msg)
+        // Store message in ref to avoid closure issues
+        pendingMessageRef.current = msg
+        // Paste message into input box
+        setMessage(msg)
+        // Trigger send on next tick after React flushes the state update
+        setTimeout(() => {
+          handleSendMessageRef.current?.()
+        }, 50)
         return true
       }
     }
@@ -405,6 +410,7 @@ export function DroidWorkerBase({
   }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToDroid])
 
   // Auto-send external message after initialized and not busy (for fix_review mode)
+  // Paste into input box and trigger send via UI path
   useEffect(() => {
     if (!initialized || waiting || autoSendMessageSentRef.current) return
     if (!autoSendMessage) return
@@ -412,17 +418,18 @@ export function DroidWorkerBase({
     if (config.autoInitPrompt && !autoPromptSentRef.current) return
 
     autoSendMessageSentRef.current = true
-    setHistory(prev => [...prev, { role: 'user', text: autoSendMessage }])
-    taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setWaiting(true)
-    if (projectPath) {
-      saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, autoSendMessage, `Droid Worker > Auto Fix Message`).catch(() => {})
-    }
-    sendToDroid(autoSendMessage)
-    // Notify App that auto-send succeeded (activates deferred Auto Fix)
-    if (onAutoSendCompleteRef.current) {
-      onAutoSendCompleteRef.current(tabId)
-    }
+    // Store message in ref to avoid closure issues with handleSendMessage
+    pendingMessageRef.current = autoSendMessage
+    // Paste message into input box
+    setMessage(autoSendMessage)
+    // Trigger send on next tick after React flushes the state update
+    // Notify App AFTER actual send, not before — prevents premature Auto Fix activation
+    setTimeout(() => {
+      const sent = handleSendMessageRef.current?.()
+      if (sent && onAutoSendCompleteRef.current) {
+        onAutoSendCompleteRef.current(tabId)
+      }
+    }, 50)
   }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, changeId, projectPath, sendToDroid, tabId])
 
   // ─── Confirmation handlers ───────────────────────────────────────
@@ -454,16 +461,32 @@ export function DroidWorkerBase({
 
   // ─── Actions ─────────────────────────────────────────────────────
 
-  const handleSendMessage = () => {
+  const handleSendMessage = (): boolean => {
+    // Check if there's a pending message from external ref (takes priority)
+    const pending = pendingMessageRef.current
+    if (pending) {
+      pendingMessageRef.current = null
+      setHistory(prev => [...prev, { role: 'user', text: pending }])
+      setMessage('')
+      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      setWaiting(true)
+      if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, pending, `Droid Worker (${changeId || 'idle'}) > Send`).catch(() => {})
+      sendToDroid(pending)
+      return true
+    }
+    
+    // Otherwise use the input box message
     const trimmed = message.trim()
-    if (!trimmed) return
+    if (!trimmed) return false
     setHistory(prev => [...prev, { role: 'user', text: trimmed }])
     setMessage('')
     taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setWaiting(true)
     if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, trimmed, `Droid Worker (${changeId || 'idle'}) > Send`).catch(() => {})
     sendToDroid(trimmed)
+    return true
   }
+  handleSendMessageRef.current = handleSendMessage
 
   const handleStop = () => {
     writeToTerminal('\x03')

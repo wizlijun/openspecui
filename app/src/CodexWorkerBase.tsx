@@ -25,6 +25,7 @@ export interface ConfirmationConfig {
 export interface CodexWorkerConfig {
   mode: CodexWorkerMode
   name: string
+  /** Auto-init prompt from YAML config; may contain {changeId} placeholder */
   autoInitPrompt?: string | null
   leftButtons: CodexQuickButton[]
   rightButtons: CodexQuickButton[]
@@ -118,8 +119,9 @@ export interface CodexWorkerBaseProps {
   onInitComplete?: () => void
   /** Register a pending session token for precise routing. Called with (token, tabId) on init, (null, tabId) on bind/cleanup. */
   onPendingToken?: (token: string | null) => void
-  /** Ref for external trigger to re-review after Droid fix completes (used by App for Auto Fix loop) */
-  onTriggerReReviewRef?: React.MutableRefObject<(() => void) | null>
+  /** Ref for external trigger to re-review after Droid fix completes (used by App for Auto Fix loop).
+   *  Returns true if review was successfully triggered, false on failure (not initialized, button missing, etc.) */
+  onTriggerReReviewRef?: React.MutableRefObject<(() => boolean) | null>
   /** Ref for external injection of status messages into Codex history (used by App for Auto Fix status) */
   onPushHistoryRef?: React.MutableRefObject<((msg: string) => void) | null>
   /** Ref for external dismissal of confirmation card (used by Auto Fix window) */
@@ -167,6 +169,7 @@ export function CodexWorkerBase({
   const initCalledRef = useRef(savedState?.initCalledRef || false)
   const initializedRef = useRef(savedState?.initializedRef || false)
   const autoPromptSentRef = useRef(savedState?.autoPromptSentRef || false)
+  const waitingRef = useRef(false)
   const abortedRef = useRef(false)
   const resultRef = useRef<HTMLDivElement>(null)
   
@@ -230,6 +233,7 @@ export function CodexWorkerBase({
 
   // Busy state
   useEffect(() => {
+    waitingRef.current = waiting
     onBusyChangeRef.current?.(waiting)
   }, [waiting])
 
@@ -241,29 +245,44 @@ export function CodexWorkerBase({
     }
   }, [bridge, tabId])
 
-  // Get the Review Again prompt from config for auto-fix cycle
-  const reviewAgainPrompt = config.leftButtons.find(b => b.label === 'Review Again')?.prompt
-    || '请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]'
-
   // Register onTriggerReReviewRef: allows App to externally trigger a re-review
+  // Simulates clicking the Review/Review Again button from config
+  const handleQuickButtonRef = useRef<((btn: CodexQuickButton) => boolean) | null>(null)
   useEffect(() => {
     const ref = onTriggerReReviewRefStable.current
     if (ref) {
-      ref.current = () => {
-        if (!initializedRef.current) return
-        setHistory(prev => [...prev, { role: 'user', text: `[Auto Fix → Review] ${reviewAgainPrompt}` }])
-        setWaiting(true)
-        if (projectPath) {
-          saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, reviewAgainPrompt, 'Codex Worker > Auto Fix Review').catch(() => {})
+      ref.current = (): boolean => {
+        if (!initializedRef.current) {
+          console.warn(`[CodexWorkerBase] triggerReReview failed: not initialized (tab=${tabId})`)
+          return false
         }
-        sendToReview(reviewAgainPrompt)
+        if (waitingRef.current) {
+          console.warn(`[CodexWorkerBase] triggerReReview failed: worker is busy (tab=${tabId})`)
+          return false
+        }
+        // Priority 1: Use Review/Review Again button from config (matches button semantics)
+        const reviewButton = config.leftButtons.find(b => b.label === 'Review Again' || b.label === 'Review')
+        if (reviewButton && handleQuickButtonRef.current) {
+          const sent = handleQuickButtonRef.current(reviewButton)
+          return sent
+        }
+        // Priority 2: Fallback to auto_init_prompt (supports {changeId} substitution)
+        if (config.autoInitPrompt) {
+          const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
+          setHistory(prev => [...prev, { role: 'user', text: prompt }])
+          setWaiting(true)
+          sendToReview(prompt)
+          return true
+        }
+        console.warn(`[CodexWorkerBase] triggerReReview failed: no Review button and no autoInitPrompt found (tab=${tabId})`)
+        return false
       }
     }
     return () => {
       const r = onTriggerReReviewRefStable.current
       if (r) r.current = null
     }
-  }, [reviewAgainPrompt, projectPath, changeId, sendToReview])
+  }, [config.autoInitPrompt, config.leftButtons, tabId, changeId, sendToReview])
 
   // Register onPushHistoryRef: allows App to inject status messages into Codex history
   useEffect(() => {
@@ -568,22 +587,6 @@ export function CodexWorkerBase({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, autoInit])  // Only depend on bridge and autoInit, not handleInit
 
-  // Auto-send init prompt after initialized AND ready (config-driven)
-  // Skip if suppressAutoInitPrompt is true (used by Self-Review Cycle which sends its own prompt)
-  useEffect(() => {
-    if (!initialized || waiting || autoPromptSentRef.current || suppressAutoInitPrompt) return
-    if (!config.autoInitPrompt) return
-
-    autoPromptSentRef.current = true
-    const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
-    setHistory(prev => [...prev, { role: 'user', text: prompt }])
-    setWaiting(true)
-    if (projectPath) {
-      saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, `Codex Worker (${changeId}) > Auto-init prompt`).catch(() => {})
-    }
-    sendToReview(prompt)
-  }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToReview, suppressAutoInitPrompt])
-
   // ─── Confirmation handlers ───────────────────────────────────────
   // NOTE: useCallback must be declared before the early return to maintain
   // consistent hook call order across renders (Rules of Hooks).
@@ -591,6 +594,17 @@ export function CodexWorkerBase({
   const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
     if (action === 'cancel') {
       setConfirmationData(null)
+      return
+    }
+
+    // Auto Fix mode: delegate to App via onAutoFixStart (starts Codex↔Droid loop)
+    // CRITICAL: Check action before target — auto_fix may have target 'droid_worker' or 'current',
+    // but must always go through the Auto Fix state machine, not the plain Droid Fix path.
+    if (action === 'auto_fix') {
+      setConfirmationData(null)
+      if (onAutoFixStartRef.current) {
+        onAutoFixStartRef.current(selectedItems, tabId)
+      }
       return
     }
 
@@ -604,18 +618,13 @@ export function CodexWorkerBase({
     }
 
     // Build fix message from template
-    const template = button.messageTemplate || config.confirmation?.responseTemplate || '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
-    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
-    const fixMessage = template.replace('{selected_items}', itemsText)
-
-    // Auto Fix mode: delegate to App via onAutoFixStart (starts Codex↔Droid loop)
-    if (action === 'auto_fix') {
-      setConfirmationData(null)
-      if (onAutoFixStartRef.current) {
-        onAutoFixStartRef.current(selectedItems, tabId)
-      }
+    const template = button.messageTemplate || config.confirmation?.responseTemplate
+    if (!template) {
+      console.error('[CodexWorkerBase] No message template found for confirmation action')
       return
     }
+    const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
+    const fixMessage = template.replace('{selected_items}', itemsText)
 
     // Fix / submit: send in current Codex Worker
     setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
@@ -634,6 +643,85 @@ export function CodexWorkerBase({
     const key = detectScenario(text, confirmationCardConfig)
     return key !== 'default' ? key : null
   }, [confirmationCardConfig])
+
+  // ─── handleQuickButton (must be before auto-review useEffect) ────
+  const handleQuickButton = useCallback((btn: CodexQuickButton): boolean => {
+    // Special actions
+    if (btn.action === 'droid_fix') {
+      // Show confirmation card if there's recent review data
+      if (confirmationData) {
+        // Confirmation card is already showing, user should use the card buttons
+        return false
+      }
+      // No confirmation data available
+      alert('请先执行 Review，然后在确认卡片中选择 Droid Fix')
+      return false
+    }
+
+    if (btn.action === 'auto_fix') {
+      // Show confirmation card if there's recent review data
+      if (confirmationData) {
+        // Confirmation card is already showing, user should use the card buttons
+        return false
+      }
+      // No confirmation data available
+      alert('请先执行 Review，然后在确认卡片中选择 Auto Fix')
+      return false
+    }
+
+    // Fixed prompt
+    if (btn.prompt) {
+      setHistory(prev => [...prev, { role: 'user', text: btn.prompt! }])
+      setWaiting(true)
+      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, btn.prompt!, `Codex Worker > ${btn.label}`).catch(() => {})
+      sendToReview(btn.prompt!)
+      return true
+    }
+
+    // Template prompt with {input}
+    if (btn.promptTemplate) {
+      const trimmed = message.trim()
+      if (btn.requiresInput && !trimmed) return false
+      const prompt = btn.promptTemplate.replace('{input}', trimmed)
+      setHistory(prev => [...prev, { role: 'user', text: prompt }])
+      setMessage('')
+      setWaiting(true)
+      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, `Codex Worker > ${btn.label}`).catch(() => {})
+      sendToReview(prompt)
+      return true
+    }
+
+    // No action taken
+    return false
+  }, [confirmationData, message, projectPath, changeId, sendToReview])
+
+  // Assign handleQuickButton to ref for use in onTriggerReReviewRef
+  handleQuickButtonRef.current = handleQuickButton
+
+  // Auto-click Review button after initialized (for code_review mode)
+  // Skip if suppressAutoInitPrompt is true (used by Self-Review Cycle which sends its own prompt)
+  useEffect(() => {
+    if (!initialized || waiting || autoPromptSentRef.current || suppressAutoInitPrompt) return
+    if (config.mode !== 'code_review') return
+    
+    // Prefer auto_init_prompt from config (supports {changeId} substitution)
+    if (config.autoInitPrompt) {
+      const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
+      setHistory(prev => [...prev, { role: 'user', text: prompt }])
+      setWaiting(true)
+      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, 'Codex Worker > Auto Init').catch(() => {})
+      sendToReview(prompt)
+      autoPromptSentRef.current = true
+      return
+    }
+    
+    // Fallback: find the Review button from config and simulate clicking it
+    const reviewButton = config.leftButtons.find(b => b.label === 'Review' || b.label === 'Review Again')
+    if (reviewButton) {
+      handleQuickButton(reviewButton)
+      autoPromptSentRef.current = true
+    }
+  }, [initialized, waiting, config.mode, config.autoInitPrompt, config.leftButtons, suppressAutoInitPrompt, changeId, projectPath, sendToReview, handleQuickButton])
 
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
 
@@ -654,52 +742,6 @@ export function CodexWorkerBase({
     setWaiting(false)
     setStopped(true)
     setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
-  }
-
-  const handleQuickButton = (btn: CodexQuickButton) => {
-    // Special actions
-    if (btn.action === 'droid_fix') {
-      // Show confirmation card if there's recent review data
-      if (confirmationData) {
-        // Confirmation card is already showing, user should use the card buttons
-        return
-      }
-      // No confirmation data available
-      alert('请先执行 Review，然后在确认卡片中选择 Droid Fix')
-      return
-    }
-
-    if (btn.action === 'auto_fix') {
-      // Show confirmation card if there's recent review data
-      if (confirmationData) {
-        // Confirmation card is already showing, user should use the card buttons
-        return
-      }
-      // No confirmation data available
-      alert('请先执行 Review，然后在确认卡片中选择 Auto Fix')
-      return
-    }
-
-    // Fixed prompt
-    if (btn.prompt) {
-      setHistory(prev => [...prev, { role: 'user', text: btn.prompt! }])
-      setWaiting(true)
-      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, btn.prompt!, `Codex Worker > ${btn.label}`).catch(() => {})
-      sendToReview(btn.prompt!)
-      return
-    }
-
-    // Template prompt with {input}
-    if (btn.promptTemplate) {
-      const trimmed = message.trim()
-      if (btn.requiresInput && !trimmed) return
-      const prompt = btn.promptTemplate.replace('{input}', trimmed)
-      setHistory(prev => [...prev, { role: 'user', text: prompt }])
-      setMessage('')
-      setWaiting(true)
-      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, `Codex Worker > ${btn.label}`).catch(() => {})
-      sendToReview(prompt)
-    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
