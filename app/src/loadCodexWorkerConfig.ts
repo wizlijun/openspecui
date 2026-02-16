@@ -1,26 +1,30 @@
 import yaml from 'js-yaml'
 import type { CodexWorkerMode, CodexWorkerConfig, CodexQuickButton } from './CodexWorkerBase'
 
-// Default fallback configs
+// Default fallback configs — mirrors codex_worker_define.yml so core actions
+// remain available during async config loading or on read failure.
 export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> = {
   standalone: {
     mode: 'standalone',
     name: 'Codex Worker',
     autoInitPrompt: null,
     leftButtons: [
-      { label: 'Review', prompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，结果按优先级P0、P1、P2排序，以todo的列表形式返回。' },
+      { label: 'Review', prompt: '严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
     ],
     rightButtons: [],
   },
   code_review: {
     mode: 'code_review',
     name: 'Code Review',
-    autoInitPrompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]。changeId为{changeId}。',
+    autoInitPrompt: '严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]',
     leftButtons: [
-      { label: 'Review', prompt: '严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]' },
-      { label: 'Fix', promptTemplate: '根据评审建议修复以下问题：{input}', requiresInput: true },
+      { label: 'Review Again', prompt: '请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
+      { label: 'Fix', promptTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
+      { label: 'Droid Fix', action: 'droid_fix', requiresInput: false },
+      { label: 'Auto Fix', action: 'auto_fix', requiresInput: false },
     ],
     rightButtons: [],
+    confirmation: { enabled: true, responseTemplate: '已确认以下评审项目：\n{selected_items}' },
   },
 }
 

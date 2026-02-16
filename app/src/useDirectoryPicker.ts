@@ -52,6 +52,8 @@ declare global {
     __onCreateAutoFixWorkers?: (data: any) => void
     __onDismissConfirmationCard?: (data: any) => void
     __onAutoFixSendToWorker?: (data: any) => void
+    __onAutoFixTriggerReReview?: (data: any) => void
+    __onAutoFixDroidFix?: (data: any) => void
     __onAutoFixComplete?: (data: any) => void
     __onCommandCallback?: (callbackId: string, output: string) => void
     __commandCallbackMap?: Record<string, (callbackId: string, output: string) => void>

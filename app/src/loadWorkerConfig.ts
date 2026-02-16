@@ -1,7 +1,8 @@
 import yaml from 'js-yaml'
 import type { WorkerMode, DroidWorkerConfig, QuickButton } from './DroidWorkerBase'
 
-// Default fallback configs
+// Default fallback configs — mirrors droid_worker_define.yml so core actions
+// remain available during async config loading or on read failure.
 export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
   new_change: {
     mode: 'new_change',
@@ -15,21 +16,23 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
   continue_change: {
     mode: 'continue_change',
     name: 'Continue Change',
-    autoInitPrompt: '请重新加载openspec的change上下文，changeId为{changeId}',
+    autoInitPrompt: '请重新加载openspec的change上下文，changeId为{changeId},并使用 openspec change show {changeId} 显示当前proposal。全部使用中文',
     leftButtons: [
-      { label: 'Continue', prompt: '/opsx-continue' },
-      { label: 'Apply', prompt: '/opsx-apply' },
-      { label: 'Code Review', action: 'open_codex_code_review' },
+      { label: 'Continue', prompt: '/opsx-continue', requiresInput: false },
+      { label: 'Apply', prompt: '/opsx-apply', requiresInput: false },
+      { label: 'Code Review', action: 'open_codex_code_review', requiresInput: false },
     ],
     rightButtons: [],
+    confirmation: { enabled: true, responseTemplate: '已确认以下项目：\n{selected_items}' },
   },
   fix_review: {
     mode: 'fix_review',
     name: 'Fix Review',
     autoInitPrompt: null,
     leftButtons: [
-      { label: 'Fix', promptTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
-      { label: 'Review', action: 'open_codex_code_review' },
+      { label: 'Fix', promptTemplate: '代码已经修改完成。请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
+      { label: 'Review Again', action: 'open_codex_code_review', requiresInput: false },
+      { label: 'Finish', promptTemplate: '/opsx-archive 并且总结做的变更，提交git', requiresInput: false },
     ],
     rightButtons: [],
   },

@@ -24,8 +24,10 @@ export interface ConfirmationCardConfig {
   scenarios: Record<string, ConfirmationScenario>
 }
 
-// Default hardcoded scenario (not in config file)
+// Default hardcoded scenario (mirrors confirmation_card.yml so core actions
+// remain available during async config loading or on read failure)
 export const DEFAULT_SCENARIO: ConfirmationScenario = {
+  trigger: '[fix_confirmation]',
   title: '请确认',
   buttons: [
     {
@@ -34,9 +36,27 @@ export const DEFAULT_SCENARIO: ConfirmationScenario = {
       style: 'secondary',
     },
     {
-      label: 'Submit',
-      action: 'submit',
+      label: 'Fix',
+      action: 'fix',
       style: 'primary',
+      messageTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}',
+      target: 'current',
+      requiresSelection: true,
+    },
+    {
+      label: 'Droid Fix',
+      action: 'droid_fix',
+      style: 'primary',
+      messageTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}',
+      target: 'droid_worker',
+      requiresSelection: true,
+    },
+    {
+      label: 'Auto Fix',
+      action: 'auto_fix',
+      style: 'primary',
+      messageTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}',
+      target: 'current',
       requiresSelection: true,
     },
   ],

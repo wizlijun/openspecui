@@ -1656,12 +1656,9 @@ class AutoFixWindow:
         self._codex_initialized = False
         self._droid_initialized = False
         self._stage_timer = None  # Timer for reviewing/fixing stage timeout
-        self._stage_timeout_secs = 300  # 5 minutes per stage
+        self._stage_timeout_secs = 0  # Disabled: wait indefinitely for review/fix to complete
         # Load confirmation card config (mirrors TS loadConfirmationCardConfig)
         self._scenarios = self._load_scenarios()
-        # Review prompt — includes changeId context so Codex reviews the specific change
-        change_ctx = f'changeId为{change_id}。' if change_id else ''
-        self._review_prompt = f'严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]。{change_ctx}'
 
     def _load_scenarios(self):
         """Load confirmation card scenarios from YAML config.
@@ -1685,32 +1682,6 @@ class AutoFixWindow:
             return parsed['scenarios']
         except Exception:
             return default_scenarios
-
-    def _resolve_fix_template(self, scenario_key=None):
-        """Resolve fix message template from confirmation_card.yml scenarios.
-        
-        Mirrors: app/src/App.tsx handleDroidFixRequest template resolution.
-        When scenario_key is provided, looks up that specific scenario first.
-        Falls back to scanning all scenarios, then to hardcoded default.
-        """
-        default_template = '请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}'
-        try:
-            # If scenario_key is provided, search that scenario first
-            if scenario_key and scenario_key in self._scenarios:
-                scenarios_to_search = [self._scenarios[scenario_key]]
-            else:
-                scenarios_to_search = list(self._scenarios.values())
-            
-            for scenario in scenarios_to_search:
-                buttons = scenario.get('buttons', [])
-                exact_btn = next((b for b in buttons if b.get('action') == 'auto_fix' and b.get('message_template')), None)
-                fallback_btn = next((b for b in buttons if b.get('target') == 'droid_worker' and b.get('message_template')), None)
-                btn = exact_btn or fallback_btn
-                if btn and btn.get('message_template'):
-                    return btn['message_template']
-        except Exception:
-            pass
-        return default_template
 
     def show(self):
         """Create and show the Auto Fix sidebar window."""
@@ -1869,6 +1840,11 @@ class AutoFixWindow:
     def _start_stage_timer(self, stage_label):
         """Start a timeout timer for the current reviewing/fixing stage."""
         self._cancel_stage_timer()
+        
+        # Skip timer if timeout is 0 (disabled)
+        if self._stage_timeout_secs <= 0:
+            return
+        
         cycle = self._cycle
 
         def on_timeout():
@@ -1908,71 +1884,52 @@ class AutoFixWindow:
         # Start stage timeout
         self._start_stage_timer('评审')
         
-        # Send review prompt to Codex
-        success = self._send_to_codex(self._review_prompt)
+        # Trigger "Review Again" button click on the Codex Worker tab via frontend
+        success = self._trigger_codex_re_review()
         if not success:
             self._cancel_stage_timer()
             self._update_step(2, 'error', '发送评审请求失败')
             self._complete(False, f'第 {self._cycle} 轮发送评审请求失败，请检查 Codex Worker 状态')
 
-    def _send_to_codex(self, text):
-        """Send a message to the Codex Worker tab via main webview JS bridge.
+    def _trigger_codex_re_review(self):
+        """Trigger "Review Again" button click on the Codex Worker tab via frontend.
         
-        Returns True if send was attempted, False if preconditions failed.
+        This calls the frontend's __onAutoFixTriggerReReview bridge, which simulates
+        clicking the "Review Again" button configured in codex_worker_define.yml.
+        Returns True if trigger was dispatched, False on error.
         """
         if not self._running or not self.coordinator.webview:
             return False
-        return self._send_to_worker('codex', self.codex_tab_id, text)
-
-    def _send_to_droid(self, text):
-        """Send a message to the Droid Worker tab via main webview JS bridge.
-        
-        Returns True if send was attempted, False if preconditions failed.
-        """
-        if not self._running or not self.coordinator.webview:
-            return False
-        return self._send_to_worker('droid', self.droid_tab_id, text)
-
-    def _send_to_worker(self, worker_type, tab_id, text):
-        """Send a message to a worker tab via main webview JS bridge.
-        
-        This triggers the worker tab's sendMessage ref, which properly updates
-        the UI (shows the message in history, sets waiting state, etc.)
-        Returns True if send was dispatched, False on error.
-        """
         try:
-            safe_tab_id = tab_id.replace('\\', '\\\\').replace("'", "\\'")
             payload = json.dumps({
-                'event': 'autofix-send-to-worker',
-                'workerType': worker_type,
-                'tabId': tab_id,
-                'message': text,
+                'tabId': self.codex_tab_id,
             }, ensure_ascii=False)
             b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+            # Escape tabId for safe JS string interpolation
+            codex_tab_id_escaped = json.dumps(self.codex_tab_id)
             js = f"""
-            if (window.__onAutoFixSendToWorker) {{
+            if (window.__onAutoFixTriggerReReview) {{
                 try {{
                     var b = atob('{b64}');
                     var a = new Uint8Array(b.length);
                     for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
                     var text = new TextDecoder('utf-8').decode(a);
-                    window.__onAutoFixSendToWorker(JSON.parse(text));
+                    window.__onAutoFixTriggerReReview(JSON.parse(text));
                 }} catch(e) {{
-                    console.error('[SelfReviewCycle] send to worker error:', e);
-                    // Notify Python of send failure via nativeBridge
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {{
-                        window.webkit.messageHandlers.nativeBridge.postMessage(JSON.stringify({{
-                            type: 'autoFixSendFailed', workerType: '{worker_type}', tabId: '{safe_tab_id}'
-                        }}));
-                    }}
+                    console.error('[SelfReviewCycle] trigger re-review error:', e);
+                    try {{
+                        window.webkit.messageHandlers.nativeBridge.postMessage(
+                            JSON.stringify({{type:'autoFixSendFailed', workerType:'codex', tabId:{codex_tab_id_escaped}}})
+                        );
+                    }} catch(e2) {{}}
                 }}
             }} else {{
-                console.error('[SelfReviewCycle] __onAutoFixSendToWorker not registered');
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {{
-                    window.webkit.messageHandlers.nativeBridge.postMessage(JSON.stringify({{
-                        type: 'autoFixSendFailed', workerType: '{worker_type}', tabId: '{safe_tab_id}'
-                    }}));
-                }}
+                console.error('[SelfReviewCycle] __onAutoFixTriggerReReview not registered');
+                try {{
+                    window.webkit.messageHandlers.nativeBridge.postMessage(
+                        JSON.stringify({{type:'autoFixSendFailed', workerType:'codex', tabId:{codex_tab_id_escaped}}})
+                    );
+                }} catch(e2) {{}}
             }}
             """
             def do_eval():
@@ -1980,8 +1937,62 @@ class AutoFixWindow:
             NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
             return True
         except Exception as e:
-            self.coordinator.log('error', 'autofix_send_worker_failed',
-                                 f'worker={worker_type}, tab={tab_id}, error={e}')
+            self.coordinator.log('error', 'autofix_trigger_review_failed',
+                                 f'tab={self.codex_tab_id}, error={e}')
+            return False
+
+    def _trigger_droid_fix(self, items, scenario_key=None):
+        """Trigger Droid fix via frontend's handleDroidFixRequest.
+        
+        This calls the frontend's __onAutoFixDroidFix bridge, which invokes
+        handleDroidFixRequest with proper template resolution, Droid Worker
+        creation/binding, and message sending.
+        Returns True if trigger was dispatched, False on error.
+        """
+        if not self._running or not self.coordinator.webview:
+            return False
+        try:
+            payload = json.dumps({
+                'codexTabId': self.codex_tab_id,
+                'droidTabId': self.droid_tab_id,
+                'items': items,
+                'scenarioKey': scenario_key,
+            }, ensure_ascii=False)
+            b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+            # Escape tabId for safe JS string interpolation
+            droid_tab_id_escaped = json.dumps(self.droid_tab_id)
+            js = f"""
+            if (window.__onAutoFixDroidFix) {{
+                try {{
+                    var b = atob('{b64}');
+                    var a = new Uint8Array(b.length);
+                    for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                    var text = new TextDecoder('utf-8').decode(a);
+                    window.__onAutoFixDroidFix(JSON.parse(text));
+                }} catch(e) {{
+                    console.error('[SelfReviewCycle] trigger droid fix error:', e);
+                    try {{
+                        window.webkit.messageHandlers.nativeBridge.postMessage(
+                            JSON.stringify({{type:'autoFixSendFailed', workerType:'droid', tabId:{droid_tab_id_escaped}}})
+                        );
+                    }} catch(e2) {{}}
+                }}
+            }} else {{
+                console.error('[SelfReviewCycle] __onAutoFixDroidFix not registered');
+                try {{
+                    window.webkit.messageHandlers.nativeBridge.postMessage(
+                        JSON.stringify({{type:'autoFixSendFailed', workerType:'droid', tabId:{droid_tab_id_escaped}}})
+                    );
+                }} catch(e2) {{}}
+            }}
+            """
+            def do_eval():
+                self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+            return True
+        except Exception as e:
+            self.coordinator.log('error', 'autofix_trigger_droid_fix_failed',
+                                 f'codex_tab={self.codex_tab_id}, error={e}')
             return False
 
     def _extract_session_id(self, data):
@@ -2209,13 +2220,10 @@ class AutoFixWindow:
         # Start stage timeout for fixing
         self._start_stage_timer('修复')
         
-        items_text = '\n'.join(f'- {item}' for item in p0p1_items)
-        fix_template = self._resolve_fix_template(scenario_key)
-        fix_message = fix_template.replace('{selected_items}', items_text)
-        
+        # Trigger Droid fix via frontend (which handles template resolution, Droid Worker creation, etc.)
         # Small delay to let UI update
         def do_fix():
-            success = self._send_to_droid(fix_message)
+            success = self._trigger_droid_fix(p0p1_items, scenario_key)
             if not success:
                 self._cancel_stage_timer()
                 self._update_step(4, 'error', '发送修复请求失败')
