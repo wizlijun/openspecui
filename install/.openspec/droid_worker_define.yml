@@ -11,6 +11,7 @@ modes:
       left: [] # 左下方无快捷按钮
       right:
         - label: "New Change"
+          role: "new_change"
           prompt_template: "/opsx-new {input}"
           requires_input: true
           position: "before_send" # 在 Send 按钮左边
@@ -26,12 +27,15 @@ modes:
     buttons:
       left:
         - label: "Continue"
+          role: "continue"
           prompt: "/opsx-continue"
           requires_input: false
         - label: "Apply"
+          role: "apply"
           prompt: "/opsx-apply"
           requires_input: false
         - label: "Code Review"
+          role: "code_review"
           action: "open_codex_code_review" # 特殊动作：打开 Codex Worker 并绑定
           requires_input: false
       right: [] # Send 按钮左边无额外按钮
@@ -44,12 +48,15 @@ modes:
     buttons:
       left:
         - label: "Fix"
+          role: "fix"
           prompt_template: "代码已经修改完成。请按选择的评审意见，先思考原因，再解决，再调试通过：{input}"
           requires_input: true
         - label: "Review Again"
+          role: "review_again"
           action: "open_codex_code_review"
           requires_input: false
         - label: "Finish"
+          role: "finish"
           prompt_template: "/opsx-archive 并且总结做的变更，提交git"
           requires_input: true
       right: []

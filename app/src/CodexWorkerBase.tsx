@@ -11,6 +11,7 @@ export type CodexWorkerMode = 'standalone' | 'code_review'
 
 export interface CodexQuickButton {
   label: string
+  role?: string
   prompt?: string
   promptTemplate?: string
   action?: string
@@ -169,6 +170,8 @@ export function CodexWorkerBase({
   const initCalledRef = useRef(savedState?.initCalledRef || false)
   const initializedRef = useRef(savedState?.initializedRef || false)
   const autoPromptSentRef = useRef(savedState?.autoPromptSentRef || false)
+  /** Tracks whether the first Review has been sent (to distinguish Review vs Review Again) */
+  const reviewSentRef = useRef(savedState?.reviewSentRef || false)
   const waitingRef = useRef(false)
   const abortedRef = useRef(false)
   const resultRef = useRef<HTMLDivElement>(null)
@@ -185,6 +188,7 @@ export function CodexWorkerBase({
         initCalledRef: initCalledRef.current,
         initializedRef: initializedRef.current,
         autoPromptSentRef: autoPromptSentRef.current,
+        reviewSentRef: reviewSentRef.current,
       }
     }
   }, [tabId, history, waiting, stopped, initialized, showInitButton])
@@ -245,8 +249,8 @@ export function CodexWorkerBase({
     }
   }, [bridge, tabId])
 
-  // Register onTriggerReReviewRef: allows App to externally trigger a re-review
-  // Simulates clicking the Review/Review Again button from config
+  // Register onTriggerReReviewRef: allows App/Self-Review Cycle to externally trigger a review.
+  // First call uses "Review" button, subsequent calls use "Review Again" button.
   const handleQuickButtonRef = useRef<((btn: CodexQuickButton) => boolean) | null>(null)
   useEffect(() => {
     const ref = onTriggerReReviewRefStable.current
@@ -260,18 +264,56 @@ export function CodexWorkerBase({
           console.warn(`[CodexWorkerBase] triggerReReview failed: worker is busy (tab=${tabId})`)
           return false
         }
-        // Priority 1: Use Review/Review Again button from config (matches button semantics)
-        const reviewButton = config.leftButtons.find(b => b.label === 'Review Again' || b.label === 'Review')
+        // Choose button based on whether first review has been sent:
+        // - First time: use "review" role button
+        // - Subsequent: use "review_again" role button
+        // Fallback to label match for backward compatibility with YAML configs without role
+        let reviewButton: CodexQuickButton | undefined
+        let usedFallback = false
+        if (!reviewSentRef.current) {
+          reviewButton = config.leftButtons.find(b => b.role === 'review')
+          if (!reviewButton) {
+            reviewButton = config.leftButtons.find(b => b.label === 'Review')
+            if (reviewButton) usedFallback = true
+          }
+          if (!reviewButton) {
+            reviewButton = config.leftButtons.find(b => b.role === 'review_again')
+              || config.leftButtons.find(b => b.label === 'Review Again')
+            if (reviewButton) {
+              console.warn(`[CodexWorkerBase:${tabId}] First review using 'review_again' button because 'review' role not found`)
+              usedFallback = true
+            }
+          }
+        } else {
+          reviewButton = config.leftButtons.find(b => b.role === 'review_again')
+          if (!reviewButton) {
+            reviewButton = config.leftButtons.find(b => b.label === 'Review Again')
+            if (reviewButton) usedFallback = true
+          }
+          if (!reviewButton) {
+            reviewButton = config.leftButtons.find(b => b.role === 'review')
+              || config.leftButtons.find(b => b.label === 'Review')
+            if (reviewButton) {
+              console.warn(`[CodexWorkerBase:${tabId}] Subsequent review using 'review' button because 'review_again' role not found`)
+              usedFallback = true
+            }
+          }
+        }
+        if (usedFallback && reviewButton && !reviewButton.role) {
+          console.warn(`[CodexWorkerBase:${tabId}] Using button with label '${reviewButton.label}' (no role) — consider adding role field to YAML config`)
+        }
         if (reviewButton && handleQuickButtonRef.current) {
           const sent = handleQuickButtonRef.current(reviewButton)
+          if (sent) reviewSentRef.current = true
           return sent
         }
-        // Priority 2: Fallback to auto_init_prompt (supports {changeId} substitution)
+        // Fallback to auto_init_prompt (supports {changeId} substitution)
         if (config.autoInitPrompt) {
           const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
           setHistory(prev => [...prev, { role: 'user', text: prompt }])
           setWaiting(true)
           sendToReview(prompt)
+          reviewSentRef.current = true
           return true
         }
         console.warn(`[CodexWorkerBase] triggerReReview failed: no Review button and no autoInitPrompt found (tab=${tabId})`)
@@ -467,25 +509,33 @@ export function CodexWorkerBase({
           // Codex prompt detected — wait for ping response via hook
           setHistory(prev => [...prev, { role: 'assistant', text: '✓ Codex started, waiting for ping response...' }])
 
-          // Fallback: if codex-notify hook never fires within 15s, degrade to ready
-          // and clean up the pending token so it doesn't block other tabs.
+          // Fallback: if codex-notify hook never fires within 120s, fail and require re-init.
+          // Clean up the pending token so it doesn't block other tabs.
           setTimeout(() => {
             if (abortedRef.current) return
             if (!initializedRef.current) {
-              console.warn('[CodexWorkerBase] codex-notify timeout — degrading to ready, cleaning up pending token')
-              initializedRef.current = true
-              setInitialized(true)
+              console.warn('[CodexWorkerBase] codex-notify timeout (120s) — init failed, requiring re-init')
+              // Reset init state so user can retry
+              initCalledRef.current = false
+              setInitialized(false)
               setWaiting(false)
-              setHistory(prev => [...prev, { role: 'assistant', text: '⚠ Codex hook timeout — ready (degraded).' }])
+              setShowInitButton(true)
+              setHistory(prev => [...prev, { role: 'assistant', text: '❌ Codex hook timeout (120s) — initialization failed. Please click "Initialize Codex" to retry.' }])
               // Clean up pending token so it doesn't misroute future events
               if (pendingTokenRef.current) {
                 onPendingTokenRef.current?.(null)
                 pendingTokenRef.current = null
               }
+              // Stop the terminal to clean up resources
+              if (bridge) {
+                bridge.stopChangeTerminal(tabId)
+                bridge.untrackCodexSession(tabId)
+              }
+              sessionIdRefStable.current.current = null
               // Dequeue from initializing list
               if (onInitCompleteRef.current) onInitCompleteRef.current()
             }
-          }, 15_000)
+          }, 120_000)
         }
       }
       bridge.runChangeCommandWithCallback(tabId, buildCodexStartCommand(token), `${tabId}-codex`, 'droid')
@@ -671,10 +721,11 @@ export function CodexWorkerBase({
 
     // Fixed prompt
     if (btn.prompt) {
-      setHistory(prev => [...prev, { role: 'user', text: btn.prompt! }])
+      const resolvedPrompt = btn.prompt.replace('{changeId}', changeId || '')
+      setHistory(prev => [...prev, { role: 'user', text: resolvedPrompt }])
       setWaiting(true)
-      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, btn.prompt!, `Codex Worker > ${btn.label}`).catch(() => {})
-      sendToReview(btn.prompt!)
+      if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, resolvedPrompt, `Codex Worker > ${btn.label}`).catch(() => {})
+      sendToReview(resolvedPrompt)
       return true
     }
 
@@ -704,7 +755,20 @@ export function CodexWorkerBase({
     if (!initialized || waiting || autoPromptSentRef.current || suppressAutoInitPrompt) return
     if (config.mode !== 'code_review') return
     
-    // Prefer auto_init_prompt from config (supports {changeId} substitution)
+    // Prefer clicking the "review" role button (supports {changeId} substitution in handleQuickButton)
+    // Fallback to label match for backward compatibility
+    const reviewButton = config.leftButtons.find(b => b.role === 'review')
+      || config.leftButtons.find(b => b.label === 'Review')
+    if (reviewButton) {
+      const sent = handleQuickButton(reviewButton)
+      if (sent) {
+        autoPromptSentRef.current = true
+        reviewSentRef.current = true
+      }
+      return
+    }
+    
+    // Fallback: use auto_init_prompt directly (supports {changeId} substitution)
     if (config.autoInitPrompt) {
       const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
       setHistory(prev => [...prev, { role: 'user', text: prompt }])
@@ -712,14 +776,19 @@ export function CodexWorkerBase({
       if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, 'Codex Worker > Auto Init').catch(() => {})
       sendToReview(prompt)
       autoPromptSentRef.current = true
+      reviewSentRef.current = true
       return
     }
     
-    // Fallback: find the Review button from config and simulate clicking it
-    const reviewButton = config.leftButtons.find(b => b.label === 'Review' || b.label === 'Review Again')
-    if (reviewButton) {
-      handleQuickButton(reviewButton)
-      autoPromptSentRef.current = true
+    // Last fallback: find "review_again" role button (with label fallback)
+    const reviewAgainButton = config.leftButtons.find(b => b.role === 'review_again')
+      || config.leftButtons.find(b => b.label === 'Review Again')
+    if (reviewAgainButton) {
+      const sent = handleQuickButton(reviewAgainButton)
+      if (sent) {
+        autoPromptSentRef.current = true
+        reviewSentRef.current = true
+      }
     }
   }, [initialized, waiting, config.mode, config.autoInitPrompt, config.leftButtons, suppressAutoInitPrompt, changeId, projectPath, sendToReview, handleQuickButton])
 

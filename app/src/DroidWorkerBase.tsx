@@ -11,6 +11,7 @@ export type WorkerMode = 'new_change' | 'continue_change' | 'fix_review'
 
 export interface QuickButton {
   label: string
+  role?: string
   /** Fixed prompt to send (mutually exclusive with promptTemplate) */
   prompt?: string
   /** Template with {input} placeholder — uses textarea content */
@@ -65,6 +66,11 @@ export interface DroidWorkerBaseProps {
   onFixComplete?: (droidWorkerId: string) => void
   /** Called when autoSendMessage is successfully sent (used by App to activate deferred Auto Fix) */
   onAutoSendComplete?: (droidWorkerId: string) => void
+  /** Called when autoSendMessage fails to send (used by App to clean up pending Auto Fix state) */
+  onAutoSendFailed?: (droidWorkerId: string) => void
+  /** Ref for external trigger to paste items into input and click Fix button.
+   *  Called with items text; returns true if Fix was triggered successfully. */
+  onTriggerFixRef?: React.MutableRefObject<((itemsText: string) => boolean) | null>
 }
 
 // ─── Component ─────────────────────────────────────────────────────
@@ -73,7 +79,7 @@ export function DroidWorkerBase({
   tabId, changeId, resumeSessionId, projectPath, config,
   onStopHookRef, onRefresh, resetKey, sessionIdRef, onSessionId, onBusyChange,
   onReviewAction, onSendMessageRef, autoSendMessage, confirmationCardConfig,
-  onFixComplete, onAutoSendComplete,
+  onFixComplete, onAutoSendComplete, onAutoSendFailed, onTriggerFixRef,
 }: DroidWorkerBaseProps) {
   // ─── HMR State Persistence ─────────────────────────────────────────
   // Store worker state in window to survive HMR unmount/remount
@@ -94,6 +100,7 @@ export function DroidWorkerBase({
   const autoSendMessageSentRef = useRef(savedState?.autoSendMessageSentRef || false)
   const resultRef = useRef<HTMLDivElement>(null)
   const handleSendMessageRef = useRef<(() => void) | null>(null)
+  const handleQuickButtonRef = useRef<((btn: QuickButton, overrideInput?: string) => boolean) | null>(null)
   const pendingMessageRef = useRef<string | null>(null)  // Store message to send, avoiding closure issues
   
   // Save state to window on every change (for HMR recovery)
@@ -132,6 +139,10 @@ export function DroidWorkerBase({
   onFixCompleteRef.current = onFixComplete
   const onAutoSendCompleteRef = useRef(onAutoSendComplete)
   onAutoSendCompleteRef.current = onAutoSendComplete
+  const onAutoSendFailedRef = useRef(onAutoSendFailed)
+  onAutoSendFailedRef.current = onAutoSendFailed
+  const onTriggerFixRefStable = useRef(onTriggerFixRef)
+  onTriggerFixRefStable.current = onTriggerFixRef
   // Track waiting state via ref for reliable access inside hook closures
   const waitingRef = useRef(false)
   // Unique task ID per submitted message — used to correlate Stop events with
@@ -283,6 +294,38 @@ export function DroidWorkerBase({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changeId, projectPath, sendToDroid, tabId])
 
+  // Register onTriggerFixRef: allows App/Self-Review Cycle to paste items into input
+  // and simulate clicking the "Fix" button (which wraps items with its promptTemplate).
+  useEffect(() => {
+    const ref = onTriggerFixRefStable.current
+    if (ref) {
+      ref.current = (itemsText: string): boolean => {
+        if (!initializedRef.current || !sessionIdRefStable.current.current) {
+          console.warn(`[DroidWorkerBase:${tabId}] triggerFix rejected — Droid not ready`)
+          return false
+        }
+        if (waitingRef.current) {
+          console.warn(`[DroidWorkerBase:${tabId}] triggerFix rejected — Droid is busy`)
+          return false
+        }
+        // Find the "fix" role button from config (fallback to label for backward compatibility)
+        const fixButton = config.leftButtons.find(b => b.role === 'fix' && b.promptTemplate)
+          || config.leftButtons.find(b => b.label === 'Fix' && b.promptTemplate)
+        if (!fixButton || !handleQuickButtonRef.current) {
+          console.warn(`[DroidWorkerBase:${tabId}] triggerFix failed — no Fix button with promptTemplate found`)
+          return false
+        }
+        // Simulate clicking Fix button with the items text as input override
+        const sent = handleQuickButtonRef.current(fixButton, itemsText)
+        return sent
+      }
+    }
+    return () => {
+      const r = onTriggerFixRefStable.current
+      if (r) r.current = null
+    }
+  }, [tabId, config.leftButtons])
+
   // Ensure global callback registry exists
   if (!window.__onChangeCommandCallback) window.__onChangeCommandCallback = {}
 
@@ -354,6 +397,12 @@ export function DroidWorkerBase({
   useEffect(() => {
     console.log(`[DroidWorker:${tabId}] ✅ MOUNTED, changeId=${changeId}, resumeSessionId=${resumeSessionId}`)
     abortedRef.current = false  // Reset on mount (important for HMR)
+    // If not initialized and init was called before unmount, reset initCalledRef
+    // so auto-init can retry (handles case where component unmounted during init)
+    if (!initializedRef.current && initCalledRef.current) {
+      console.warn(`[DroidWorker:${tabId}] Resetting initCalledRef — was unmounted during init`)
+      initCalledRef.current = false
+    }
     return () => {
       const isClosing = window.__closingTabs?.has(tabId)
       console.warn(`[DroidWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}, closingTabs=${JSON.stringify([...(window.__closingTabs || [])])}`)
@@ -410,7 +459,7 @@ export function DroidWorkerBase({
   }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToDroid])
 
   // Auto-send external message after initialized and not busy (for fix_review mode)
-  // Paste into input box and trigger send via UI path
+  // Trigger Fix button with items text instead of sending raw message
   useEffect(() => {
     if (!initialized || waiting || autoSendMessageSentRef.current) return
     if (!autoSendMessage) return
@@ -418,19 +467,26 @@ export function DroidWorkerBase({
     if (config.autoInitPrompt && !autoPromptSentRef.current) return
 
     autoSendMessageSentRef.current = true
-    // Store message in ref to avoid closure issues with handleSendMessage
-    pendingMessageRef.current = autoSendMessage
-    // Paste message into input box
-    setMessage(autoSendMessage)
-    // Trigger send on next tick after React flushes the state update
-    // Notify App AFTER actual send, not before — prevents premature Auto Fix activation
+    
+    // Find the "fix" role button from config (fallback to label for backward compatibility)
+    const fixButton = config.leftButtons.find(b => b.role === 'fix' && b.promptTemplate)
+      || config.leftButtons.find(b => b.label === 'Fix' && b.promptTemplate)
+    if (!fixButton || !handleQuickButtonRef.current) {
+      console.warn(`[DroidWorkerBase:${tabId}] autoSendMessage failed — no Fix button with promptTemplate found`)
+      if (onAutoSendFailedRef.current) onAutoSendFailedRef.current(tabId)
+      return
+    }
+    
+    // Trigger Fix button with autoSendMessage as items text
     setTimeout(() => {
-      const sent = handleSendMessageRef.current?.()
+      const sent = handleQuickButtonRef.current?.(fixButton, autoSendMessage)
       if (sent && onAutoSendCompleteRef.current) {
         onAutoSendCompleteRef.current(tabId)
+      } else if (!sent && onAutoSendFailedRef.current) {
+        onAutoSendFailedRef.current(tabId)
       }
     }, 50)
-  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, changeId, projectPath, sendToDroid, tabId])
+  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, config.leftButtons, tabId])
 
   // ─── Confirmation handlers ───────────────────────────────────────
   // NOTE: useCallback must be declared before the early return to maintain
@@ -498,7 +554,7 @@ export function DroidWorkerBase({
     setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
   }
 
-  const handleQuickButton = (btn: QuickButton) => {
+  const handleQuickButton = (btn: QuickButton, overrideInput?: string): boolean => {
     // Special action
     if (btn.action) {
       // Support both new and legacy action names
@@ -506,7 +562,7 @@ export function DroidWorkerBase({
       if ((normalizedAction === 'open_codex_code_review' || normalizedAction === 'open_code_review' || normalizedAction === 'code_review') && onReviewActionRef.current && changeId) {
         onReviewActionRef.current(changeId)
       }
-      return
+      return false
     }
 
     // Fixed prompt
@@ -516,22 +572,27 @@ export function DroidWorkerBase({
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, btn.prompt!, `Droid Worker > ${btn.label}`).catch(() => {})
       sendToDroid(btn.prompt!)
-      return
+      return true
     }
 
-    // Template prompt with {input}
+    // Template prompt with {input} — use overrideInput if provided, otherwise use textarea
     if (btn.promptTemplate) {
-      const trimmed = message.trim()
-      if (btn.requiresInput && !trimmed) return
-      const prompt = btn.promptTemplate.replace('{input}', trimmed)
+      const input = overrideInput !== undefined ? overrideInput : message.trim()
+      if (btn.requiresInput && !input) return false
+      const prompt = btn.promptTemplate.replace('{input}', input)
       setHistory(prev => [...prev, { role: 'user', text: prompt }])
       setMessage('')
       taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, prompt, `Droid Worker > ${btn.label}`).catch(() => {})
       sendToDroid(prompt)
+      return true
     }
+
+    // No action taken
+    return false
   }
+  handleQuickButtonRef.current = handleQuickButton
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && e.metaKey) {

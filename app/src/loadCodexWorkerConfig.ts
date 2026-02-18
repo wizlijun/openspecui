@@ -9,7 +9,7 @@ export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> =
     name: 'Codex Worker',
     autoInitPrompt: null,
     leftButtons: [
-      { label: 'Review', prompt: '严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
+      { label: 'Review', role: 'review', prompt: '严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
     ],
     rightButtons: [],
   },
@@ -18,10 +18,11 @@ export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> =
     name: 'Code Review',
     autoInitPrompt: '严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]',
     leftButtons: [
-      { label: 'Review Again', prompt: '请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
-      { label: 'Fix', promptTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
-      { label: 'Droid Fix', action: 'droid_fix', requiresInput: false },
-      { label: 'Auto Fix', action: 'auto_fix', requiresInput: false },
+      { label: 'Review', role: 'review', prompt: '严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
+      { label: 'Review Again', role: 'review_again', prompt: '请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
+      { label: 'Fix', role: 'fix', promptTemplate: '请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
+      { label: 'Droid Fix', role: 'droid_fix', action: 'droid_fix', requiresInput: false },
+      { label: 'Auto Fix', role: 'auto_fix', action: 'auto_fix', requiresInput: false },
     ],
     rightButtons: [],
     confirmation: { enabled: true, responseTemplate: '已确认以下评审项目：\n{selected_items}' },
@@ -30,6 +31,7 @@ export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> =
 
 interface YamlButtonConfig {
   label: string
+  role?: string
   prompt?: string
   prompt_template?: string
   action?: string
@@ -59,6 +61,7 @@ interface YamlConfig {
 function parseButton(btn: YamlButtonConfig): CodexQuickButton {
   return {
     label: btn.label,
+    role: btn.role,
     prompt: btn.prompt,
     promptTemplate: btn.prompt_template,
     action: btn.action,

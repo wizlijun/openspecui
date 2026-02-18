@@ -10,6 +10,7 @@ modes:
     buttons:
       left:
         - label: "Review"
+          role: "review"
           prompt: "严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]"
           requires_input: false
       right: []
@@ -24,16 +25,24 @@ modes:
       response_template: "已确认以下评审项目：\n{selected_items}"
     buttons:
       left:
+        - label: "Review"
+          role: "review"
+          prompt: "严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]"
+          requires_input: false
         - label: "Review Again"
+          role: "review_again"
           prompt: "请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]"
           requires_input: false
         - label: "Fix"
+          role: "fix"
           prompt_template: "请按选择的评审意见，先思考原因，再解决，再调试通过：{input}"
           requires_input: true
         - label: "Droid Fix"
+          role: "droid_fix"
           action: "droid_fix"
           requires_input: false
         - label: "Auto Fix"
+          role: "auto_fix"
           action: "auto_fix"
           requires_input: false
       right: []

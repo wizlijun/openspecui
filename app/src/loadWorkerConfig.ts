@@ -10,7 +10,7 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     autoInitPrompt: null,
     leftButtons: [],
     rightButtons: [
-      { label: 'New Change', promptTemplate: '/opsx-new {input}', requiresInput: true },
+      { label: 'New Change', role: 'new_change', promptTemplate: '/opsx-new {input}', requiresInput: true },
     ],
   },
   continue_change: {
@@ -18,9 +18,9 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     name: 'Continue Change',
     autoInitPrompt: '请重新加载openspec的change上下文，changeId为{changeId},并使用 openspec change show {changeId} 显示当前proposal。全部使用中文',
     leftButtons: [
-      { label: 'Continue', prompt: '/opsx-continue', requiresInput: false },
-      { label: 'Apply', prompt: '/opsx-apply', requiresInput: false },
-      { label: 'Code Review', action: 'open_codex_code_review', requiresInput: false },
+      { label: 'Continue', role: 'continue', prompt: '/opsx-continue', requiresInput: false },
+      { label: 'Apply', role: 'apply', prompt: '/opsx-apply', requiresInput: false },
+      { label: 'Code Review', role: 'code_review', action: 'open_codex_code_review', requiresInput: false },
     ],
     rightButtons: [],
     confirmation: { enabled: true, responseTemplate: '已确认以下项目：\n{selected_items}' },
@@ -30,9 +30,9 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     name: 'Fix Review',
     autoInitPrompt: null,
     leftButtons: [
-      { label: 'Fix', promptTemplate: '代码已经修改完成。请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
-      { label: 'Review Again', action: 'open_codex_code_review', requiresInput: false },
-      { label: 'Finish', promptTemplate: '/opsx-archive 并且总结做的变更，提交git', requiresInput: false },
+      { label: 'Fix', role: 'fix', promptTemplate: '代码已经修改完成。请按选择的评审意见，先思考原因，再解决，再调试通过：{input}', requiresInput: true },
+      { label: 'Review Again', role: 'review_again', action: 'open_codex_code_review', requiresInput: false },
+      { label: 'Finish', role: 'finish', promptTemplate: '/opsx-archive 并且总结做的变更，提交git', requiresInput: false },
     ],
     rightButtons: [],
   },
@@ -40,6 +40,7 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
 
 interface YamlButtonConfig {
   label: string
+  role?: string
   prompt?: string
   prompt_template?: string
   action?: string
@@ -69,6 +70,7 @@ interface YamlConfig {
 function parseButton(btn: YamlButtonConfig): QuickButton {
   return {
     label: btn.label,
+    role: btn.role,
     prompt: btn.prompt,
     promptTemplate: btn.prompt_template,
     action: btn.action,
