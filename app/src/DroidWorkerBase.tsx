@@ -323,9 +323,19 @@ export function DroidWorkerBase({
           console.warn(`[DroidWorkerBase:${tabId}] triggerFix failed — no Fix button with promptTemplate found`)
           return false
         }
-        // Simulate clicking Fix button with the items text as input override
-        const sent = handleQuickButtonRef.current(fixButton, itemsText)
-        return sent
+        
+        // CRITICAL: Fill textarea with items text, then simulate clicking Fix button.
+        // This ensures the text goes through the normal UI flow (textarea → Fix button → Send button).
+        setMessage(itemsText)
+        
+        // Trigger Fix button on next tick after React flushes the textarea update
+        setTimeout(() => {
+          if (handleQuickButtonRef.current) {
+            handleQuickButtonRef.current(fixButton, undefined)  // undefined = read from textarea
+          }
+        }, 50)
+        
+        return true
       }
     }
     return () => {
