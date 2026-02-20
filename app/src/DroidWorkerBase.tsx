@@ -530,11 +530,15 @@ export function DroidWorkerBase({
     const pending = pendingMessageRef.current
     if (pending) {
       pendingMessageRef.current = null
-      setHistory(prev => [...prev, { role: 'user', text: pending }])
-      setMessage('')
-      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-      setWaiting(true)
-      if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, pending, `Droid Worker (${changeId || 'idle'}) > Send`).catch(() => {})
+      // If history already contains this message (from handleQuickButton), just send it
+      // Otherwise, add to history and set waiting state
+      const lastMessage = history[history.length - 1]
+      if (!lastMessage || lastMessage.role !== 'user' || lastMessage.text !== pending) {
+        setHistory(prev => [...prev, { role: 'user', text: pending }])
+        taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+        setWaiting(true)
+        if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, pending, `Droid Worker (${changeId || 'idle'}) > Send`).catch(() => {})
+      }
       sendToDroid(pending)
       return true
     }
@@ -591,9 +595,16 @@ export function DroidWorkerBase({
       
       // CRITICAL: Always use pendingMessageRef + Send button path for all promptTemplate texts.
       // This ensures consistent behavior and avoids Droid CLI's bracketed paste truncation.
+      // Set history and waiting state immediately, then trigger send asynchronously.
+      setHistory(prev => [...prev, { role: 'user', text: prompt }])
+      setMessage('')
+      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      setWaiting(true)
+      if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, prompt, `Droid Worker > ${btn.label}`).catch(() => {})
+      
+      // Use pendingMessageRef to pass the prompt to handleSendMessage
       pendingMessageRef.current = prompt
-      setMessage(prompt)  // Also update UI for visual feedback
-      // Trigger Send button on next tick
+      // Trigger send on next tick
       setTimeout(() => {
         handleSendMessageRef.current?.()
       }, 50)
