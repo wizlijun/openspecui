@@ -589,26 +589,14 @@ export function DroidWorkerBase({
       if (btn.requiresInput && !input) return false
       const prompt = btn.promptTemplate.replace('{input}', input)
       
-      // CRITICAL: For long prompts (>500 chars), use pendingMessageRef + Send button
-      // to avoid Droid CLI's bracketed paste truncation issue.
-      // This routes through handleSendMessage which uses sendToDroid without bracketed paste for long texts.
-      if (prompt.length > 500) {
-        pendingMessageRef.current = prompt
-        setMessage(prompt)  // Also update UI for visual feedback
-        // Trigger Send button on next tick
-        setTimeout(() => {
-          handleSendMessageRef.current?.()
-        }, 50)
-        return true
-      }
-      
-      // Short prompt: use sendToDroid directly (faster)
-      setHistory(prev => [...prev, { role: 'user', text: prompt }])
-      setMessage('')
-      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-      setWaiting(true)
-      if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, prompt, `Droid Worker > ${btn.label}`).catch(() => {})
-      sendToDroid(prompt)
+      // CRITICAL: Always use pendingMessageRef + Send button path for all promptTemplate texts.
+      // This ensures consistent behavior and avoids Droid CLI's bracketed paste truncation.
+      pendingMessageRef.current = prompt
+      setMessage(prompt)  // Also update UI for visual feedback
+      // Trigger Send button on next tick
+      setTimeout(() => {
+        handleSendMessageRef.current?.()
+      }, 50)
       return true
     }
 
