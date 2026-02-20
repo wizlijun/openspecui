@@ -25,6 +25,18 @@ export function HumanConfirmationCard({ text, scenario, onAction }: HumanConfirm
     setItems(initialItems.map(item => ({ ...item, checked: true })))
   }, [initialItems])
 
+  // Auto-expand all textareas after items are set
+  useEffect(() => {
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      const textareas = document.querySelectorAll<HTMLTextAreaElement>('.confirmation-item-text')
+      textareas.forEach(el => {
+        el.style.height = 'auto'
+        el.style.height = el.scrollHeight + 'px'
+      })
+    })
+  }, [items])
+
   const handleCancel = useCallback(() => {
     onAction('cancel', [], { label: '', action: 'cancel', style: 'secondary' })
   }, [onAction])

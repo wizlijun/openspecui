@@ -238,12 +238,36 @@ class TerminalSession:
             t = threading.Thread(target=self._read_loop, daemon=True)
             t.start()
 
+    # macOS PTY input buffer is very small (kern.tty.ptmx_max = 511 bytes).
+    # Writing more than this in a single os.write() causes data loss.
+    # We chunk writes and use a small delay between chunks to let the PTY drain.
+    _PTY_CHUNK_SIZE = 256  # Conservative: well under the 511-byte limit
+    _PTY_CHUNK_DELAY = 0.02  # 20ms between chunks
+
     def write(self, data: bytes):
         if self.master_fd is not None and self._alive:
             try:
-                os.write(self.master_fd, data)
+                if len(data) <= self._PTY_CHUNK_SIZE:
+                    os.write(self.master_fd, data)
+                else:
+                    # Large write: chunk it to avoid PTY buffer overflow
+                    self._write_chunked(data)
             except OSError:
                 pass
+
+    def _write_chunked(self, data: bytes):
+        """Write data in small chunks with delays to avoid PTY buffer overflow."""
+        offset = 0
+        while offset < len(data) and self._alive:
+            end = min(offset + self._PTY_CHUNK_SIZE, len(data))
+            chunk = data[offset:end]
+            try:
+                os.write(self.master_fd, chunk)
+            except OSError:
+                break
+            offset = end
+            if offset < len(data):
+                time.sleep(self._PTY_CHUNK_DELAY)
 
     def resize(self, cols: int, rows: int):
         if cols == self.cols and rows == self.rows:

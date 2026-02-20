@@ -11,7 +11,7 @@ modes:
       left:
         - label: "Review"
           role: "review"
-          prompt: "严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]"
+          prompt: "严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]。重要：每个评审项必须完整输出，不要使用省略号或折叠标记（如 '... N lines]'），确保所有文件路径、代码片段和描述都完整显示。"
           requires_input: false
       right: []
 
@@ -19,7 +19,7 @@ modes:
   code_review:
     name: "Code Review"
     description: "评审指定 change 的代码修改"
-    auto_init_prompt: "严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]"
+    auto_init_prompt: "严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]。重要：每个评审项必须完整输出，不要使用省略号或折叠标记（如 '... N lines]'），确保所有文件路径、代码片段和描述都完整显示。"
     confirmation:
       enabled: true
       response_template: "已确认以下评审项目：\n{selected_items}"
@@ -27,11 +27,11 @@ modes:
       left:
         - label: "Review"
           role: "review"
-          prompt: "严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]"
+          prompt: "严格评审上次git提交之后修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。changeId为{changeId}。请在返回结果最开始加上[fix_confirmation]。重要：每个评审项必须完整输出，不要使用省略号或折叠标记（如 '... N lines]'），确保所有文件路径、代码片段和描述都完整显示。"
           requires_input: false
         - label: "Review Again"
           role: "review_again"
-          prompt: "请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]"
+          prompt: "请再次严格评审修改的代码,无需修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]。重要：每个评审项必须完整输出，不要使用省略号或折叠标记（如 '... N lines]'），确保所有文件路径、代码片段和描述都完整显示。"
           requires_input: false
         - label: "Fix"
           role: "fix"
