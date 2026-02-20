@@ -241,8 +241,11 @@ class TerminalSession:
     # macOS PTY input buffer is very small (kern.tty.ptmx_max = 511 bytes).
     # Writing more than this in a single os.write() causes data loss.
     # We chunk writes and use a small delay between chunks to let the PTY drain.
-    _PTY_CHUNK_SIZE = 256  # Conservative: well under the 511-byte limit
-    _PTY_CHUNK_DELAY = 0.02  # 20ms between chunks
+    # CRITICAL: For bracketed paste mode (\x1b[200~ ... \x1b[201~), we must write
+    # all chunks rapidly without delay, otherwise the terminal may interpret the
+    # pause as end-of-paste and truncate the input.
+    _PTY_CHUNK_SIZE = 400  # Increased: closer to 511-byte limit but still safe
+    _PTY_CHUNK_DELAY = 0.005  # Reduced to 5ms: fast enough to avoid paste timeout
 
     def write(self, data: bytes):
         if self.master_fd is not None and self._alive:
@@ -256,7 +259,11 @@ class TerminalSession:
                 pass
 
     def _write_chunked(self, data: bytes):
-        """Write data in small chunks with delays to avoid PTY buffer overflow."""
+        """Write data in small chunks with minimal delays to avoid PTY buffer overflow.
+        
+        Uses a tight loop with very short delays (5ms) to keep data flowing continuously,
+        which is critical for bracketed paste mode where pauses can cause truncation.
+        """
         offset = 0
         while offset < len(data) and self._alive:
             end = min(offset + self._PTY_CHUNK_SIZE, len(data))
