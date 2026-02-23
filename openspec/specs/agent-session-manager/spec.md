@@ -40,6 +40,20 @@ The session manager SHALL maintain an output buffer per agent session for termin
 - **WHEN** an agent's output buffer exceeds 1MB
 - **THEN** the session manager SHALL trim the oldest data to keep the buffer within limits
 
+### Requirement: Worker 聊天历史条目上限
+DroidWorkerBase 和 CodexWorkerBase 的聊天历史 SHALL 限制在 200 条以内，防止长时间运行后 DOM 节点过多导致界面卡顿。
+
+#### Scenario: 超过上限时截断旧消息
+- **WHEN** 新消息追加后聊天历史总条数超过 200 条
+- **THEN** 系统 SHALL 自动丢弃最旧的消息，仅保留最新的 200 条
+
+### Requirement: HMR 状态持久化防抖
+Worker 组件的 HMR 状态持久化（`window.__workerStates`）SHALL 使用 500ms 防抖，避免每次 state 变化都立即序列化完整历史数组。
+
+#### Scenario: 高频状态变化时防抖
+- **WHEN** Worker 的 history、waiting、initialized 等状态在 500ms 内多次变化
+- **THEN** 系统 SHALL 仅在最后一次变化后 500ms 执行一次 `__workerStates` 写入
+
 ### Requirement: Cleanup sessions on panel close
 The session manager SHALL properly clean up resources when the agent panel is closed or the page is unloaded.
 

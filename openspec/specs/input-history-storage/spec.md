@@ -41,6 +41,13 @@ TBD - created by archiving change desktop-input-history. Update Purpose after ar
 - **WHEN** 用户停止输入超过 2 秒
 - **THEN** 系统 SHALL 将当前编辑器内容保存为一条新的历史记录
 
+### Requirement: 历史记录条目上限
+系统 SHALL 将历史记录条目数量限制在 500 条以内，防止 JSON 文件无限增长导致读写性能下降。
+
+#### Scenario: 超过上限时截断旧记录
+- **WHEN** 保存新记录后总条目数超过 500 条
+- **THEN** 系统 SHALL 自动丢弃最旧的记录，仅保留最新的 500 条
+
 ### Requirement: 历史记录按时间倒序排列
 系统 SHALL 按时间戳倒序存储和返回历史记录，最新的记录排在最前面。
 

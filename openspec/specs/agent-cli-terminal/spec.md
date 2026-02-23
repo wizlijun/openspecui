@@ -24,6 +24,7 @@ The terminal SHALL display agent CLI output in real-time as it is received via W
 #### Scenario: Scrollback buffer
 - **WHEN** agent output exceeds the visible terminal area
 - **THEN** the user SHALL be able to scroll up to view previous output
+- **THEN** scrollback buffer SHALL be capped at 10000 lines to prevent excessive memory usage during long-running sessions
 
 ### Requirement: Toggle agent panel visibility
 The user SHALL be able to show and hide the agent CLI panel to maximize canvas/editor space.

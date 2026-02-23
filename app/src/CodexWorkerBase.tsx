@@ -5,6 +5,13 @@ import { HumanConfirmationCard } from './HumanConfirmationCard'
 import type { ConfirmationCardConfig, ConfirmationButton, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
 
+const MAX_HISTORY = 200
+
+function cappedHistory<T>(prev: T[], ...items: T[]): T[] {
+  const next = [...prev, ...items]
+  return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
+}
+
 // ─── Types ─────────────────────────────────────────────────────────
 
 export type CodexWorkerMode = 'standalone' | 'code_review'
@@ -176,21 +183,26 @@ export function CodexWorkerBase({
   const abortedRef = useRef(false)
   const resultRef = useRef<HTMLDivElement>(null)
   
-  // Save state to window on every change (for HMR recovery)
+  // Save state to window on every change (for HMR recovery) — debounced to reduce overhead
+  const workerStateSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (window.__workerStates) {
-      window.__workerStates[tabId] = {
-        history,
-        waiting,
-        stopped,
-        initialized,
-        showInitButton,
-        initCalledRef: initCalledRef.current,
-        initializedRef: initializedRef.current,
-        autoPromptSentRef: autoPromptSentRef.current,
-        reviewSentRef: reviewSentRef.current,
+    if (workerStateSaveTimerRef.current) clearTimeout(workerStateSaveTimerRef.current)
+    workerStateSaveTimerRef.current = setTimeout(() => {
+      if (window.__workerStates) {
+        window.__workerStates[tabId] = {
+          history,
+          waiting,
+          stopped,
+          initialized,
+          showInitButton,
+          initCalledRef: initCalledRef.current,
+          initializedRef: initializedRef.current,
+          autoPromptSentRef: autoPromptSentRef.current,
+          reviewSentRef: reviewSentRef.current,
+        }
       }
-    }
+    }, 500)
+    return () => { if (workerStateSaveTimerRef.current) clearTimeout(workerStateSaveTimerRef.current) }
   }, [tabId, history, waiting, stopped, initialized, showInitButton])
 
   const onRefreshRef = useRef(onRefresh)
@@ -310,7 +322,7 @@ export function CodexWorkerBase({
         // Fallback to auto_init_prompt (supports {changeId} substitution)
         if (config.autoInitPrompt) {
           const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
-          setHistory(prev => [...prev, { role: 'user', text: prompt }])
+          setHistory(prev => cappedHistory(prev, { role: 'user', text: prompt }))
           setWaiting(true)
           sendToReview(prompt)
           reviewSentRef.current = true
@@ -331,7 +343,7 @@ export function CodexWorkerBase({
     const ref = onPushHistoryRefStable.current
     if (ref) {
       ref.current = (msg: string) => {
-        setHistory(prev => [...prev, { role: 'assistant', text: msg }])
+        setHistory(prev => cappedHistory(prev, { role: 'assistant', text: msg }))
       }
     }
     return () => {
@@ -363,7 +375,7 @@ export function CodexWorkerBase({
           console.warn(`[CodexWorkerBase:${tabId}] sendMessage rejected — busy or not initialized`)
           return false
         }
-        setHistory(prev => [...prev, { role: 'user', text: message }])
+        setHistory(prev => cappedHistory(prev, { role: 'user', text: message }))
         setWaiting(true)
         sendToReview(message)
         return true
@@ -398,7 +410,7 @@ export function CodexWorkerBase({
           initializedRef.current = true
           setInitialized(true)
           setWaiting(false)
-          setHistory(prev => [...prev, { role: 'assistant', text: '✓ Codex is ready.' }])
+          setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ Codex is ready.' }))
           // CRITICAL: Dequeue from initializing list on successful init
           if (onInitCompleteRef.current) onInitCompleteRef.current()
           return
@@ -407,7 +419,7 @@ export function CodexWorkerBase({
         // Subsequent events: check if task is complete
         if (isCodexTurnComplete(data)) {
           const finalMessage = extractCodexFinalMessage(data) || '✅ Codex task completed.'
-          setHistory(prev => [...prev, { role: 'assistant', text: finalMessage }])
+          setHistory(prev => cappedHistory(prev, { role: 'assistant', text: finalMessage }))
           setWaiting(false)
 
           // Auto-fix mode (reviewing stage): notify App with review result
@@ -435,7 +447,7 @@ export function CodexWorkerBase({
         if (hookSid && mySid && hookSid !== mySid) return
 
         const result = data.last_result || '(no response)'
-        setHistory(prev => [...prev, { role: 'assistant', text: result }])
+        setHistory(prev => cappedHistory(prev, { role: 'assistant', text: result }))
         setWaiting(false)
 
         // Auto-fix mode (reviewing stage): notify App with review result
@@ -490,7 +502,7 @@ export function CodexWorkerBase({
     const initMsg = isResumeMode
       ? `[Init] Resuming codex session ${resumeSessionId!.slice(0, 8)}...`
       : '[Init] Starting codex terminal → cd → init script → codex'
-    setHistory(prev => [...prev, { role: 'user', text: initMsg }])
+    setHistory(prev => cappedHistory(prev, { role: 'user', text: initMsg }))
 
     if (isResumeMode) {
       sessionIdRefStable.current.current = resumeSessionId!
@@ -502,12 +514,12 @@ export function CodexWorkerBase({
 
     const step3_startCodex = () => {
       if (abortedRef.current) return
-      setHistory(prev => [...prev, { role: 'assistant', text: '✓ Init script ready (if present). Starting codex with ping...' }])
+      setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ Init script ready (if present). Starting codex with ping...' }))
       window.__onChangeCommandCallback![tabId] = (callbackId: string) => {
         if (abortedRef.current) return
         if (callbackId === `${tabId}-codex`) {
           // Codex prompt detected — wait for ping response via hook
-          setHistory(prev => [...prev, { role: 'assistant', text: '✓ Codex started, waiting for ping response...' }])
+          setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ Codex started, waiting for ping response...' }))
 
           // Fallback: if codex-notify hook never fires within 120s, fail and require re-init.
           // Clean up the pending token so it doesn't block other tabs.
@@ -520,7 +532,7 @@ export function CodexWorkerBase({
               setInitialized(false)
               setWaiting(false)
               setShowInitButton(true)
-              setHistory(prev => [...prev, { role: 'assistant', text: '❌ Codex hook timeout (120s) — initialization failed. Please click "Initialize Codex" to retry.' }])
+              setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '❌ Codex hook timeout (120s) — initialization failed. Please click "Initialize Codex" to retry.' }))
               // Clean up pending token so it doesn't misroute future events
               if (pendingTokenRef.current) {
                 onPendingTokenRef.current?.(null)
@@ -543,7 +555,7 @@ export function CodexWorkerBase({
 
     const step2_sourceReviewCmd = () => {
       if (abortedRef.current) return
-      setHistory(prev => [...prev, { role: 'assistant', text: '✓ cd done. Checking .openspec files & sourcing init script...' }])
+      setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ cd done. Checking .openspec files & sourcing init script...' }))
       window.__onChangeCommandCallback![tabId] = (callbackId: string) => {
         if (abortedRef.current) return
         if (callbackId === `${tabId}-source`) step3_startCodex()
@@ -580,7 +592,7 @@ export function CodexWorkerBase({
     window.__onChangeCommandCallback[tabId] = (callbackId: string) => {
       if (abortedRef.current) return
       if (callbackId === `${tabId}-shell-ready`) {
-        setHistory(prev => [...prev, { role: 'assistant', text: '✓ Shell ready.' }])
+        setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ Shell ready.' }))
         step1_cd()
       }
     }
@@ -677,7 +689,7 @@ export function CodexWorkerBase({
     const fixMessage = template.replace('{selected_items}', itemsText)
 
     // Fix / submit: send in current Codex Worker
-    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
+    setHistory(prev => cappedHistory(prev, { role: 'user', text: fixMessage }))
     setConfirmationData(null)
     setWaiting(true)
     if (projectPath) {
@@ -722,7 +734,7 @@ export function CodexWorkerBase({
     // Fixed prompt
     if (btn.prompt) {
       const resolvedPrompt = btn.prompt.replace('{changeId}', changeId || '')
-      setHistory(prev => [...prev, { role: 'user', text: resolvedPrompt }])
+      setHistory(prev => cappedHistory(prev, { role: 'user', text: resolvedPrompt }))
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, resolvedPrompt, `Codex Worker > ${btn.label}`).catch(() => {})
       sendToReview(resolvedPrompt)
@@ -734,7 +746,7 @@ export function CodexWorkerBase({
       const trimmed = message.trim()
       if (btn.requiresInput && !trimmed) return false
       const prompt = btn.promptTemplate.replace('{input}', trimmed)
-      setHistory(prev => [...prev, { role: 'user', text: prompt }])
+      setHistory(prev => cappedHistory(prev, { role: 'user', text: prompt }))
       setMessage('')
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, `Codex Worker > ${btn.label}`).catch(() => {})
@@ -771,7 +783,7 @@ export function CodexWorkerBase({
     // Fallback: use auto_init_prompt directly (supports {changeId} substitution)
     if (config.autoInitPrompt) {
       const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
-      setHistory(prev => [...prev, { role: 'user', text: prompt }])
+      setHistory(prev => cappedHistory(prev, { role: 'user', text: prompt }))
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, prompt, 'Codex Worker > Auto Init').catch(() => {})
       sendToReview(prompt)
@@ -799,7 +811,7 @@ export function CodexWorkerBase({
   const handleSendMessage = () => {
     const trimmed = message.trim()
     if (!trimmed) return
-    setHistory(prev => [...prev, { role: 'user', text: trimmed }])
+    setHistory(prev => cappedHistory(prev, { role: 'user', text: trimmed }))
     setMessage('')
     setWaiting(true)
     if (projectPath) saveHistoryEntry(projectPath, `codex://${changeId || 'standalone'}`, trimmed, `Codex Worker > Send`).catch(() => {})
@@ -810,7 +822,7 @@ export function CodexWorkerBase({
     if (bridge) bridge.writeChangeInput(tabId, '\x03')
     setWaiting(false)
     setStopped(true)
-    setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
+    setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '⏹ Stopped' }))
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

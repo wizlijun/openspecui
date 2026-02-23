@@ -65,6 +65,8 @@ export async function loadHistory(projectPath: string): Promise<HistoryEntry[]> 
   return legacyEntries || []
 }
 
+const MAX_HISTORY_ENTRIES = 500
+
 export async function saveHistoryEntry(
   projectPath: string,
   filePath: string,
@@ -86,8 +88,8 @@ export async function saveHistoryEntry(
     source,
   }
 
-  // Prepend new entry (newest first)
-  const updatedHistory = [newEntry, ...existingHistory]
+  // Prepend new entry (newest first), cap at MAX_HISTORY_ENTRIES
+  const updatedHistory = [newEntry, ...existingHistory].slice(0, MAX_HISTORY_ENTRIES)
 
   // Write back to file
   await writeHistoryFile(projectPath, updatedHistory)

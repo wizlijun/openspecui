@@ -5,6 +5,13 @@ import { HumanConfirmationCard } from './HumanConfirmationCard'
 import type { ConfirmationCardConfig, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
 
+const MAX_HISTORY = 200
+
+function cappedHistory<T>(prev: T[], ...items: T[]): T[] {
+  const next = [...prev, ...items]
+  return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
+}
+
 // ─── Types ─────────────────────────────────────────────────────────
 
 export type WorkerMode = 'new_change' | 'continue_change' | 'fix_review'
@@ -103,20 +110,25 @@ export function DroidWorkerBase({
   const handleQuickButtonRef = useRef<((btn: QuickButton, overrideInput?: string) => boolean) | null>(null)
   const pendingMessageRef = useRef<string | null>(null)  // Store message to send, avoiding closure issues
   
-  // Save state to window on every change (for HMR recovery)
+  // Save state to window on every change (for HMR recovery) — debounced to reduce overhead
+  const workerStateSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (window.__workerStates) {
-      window.__workerStates[tabId] = {
-        history,
-        waiting,
-        initialized,
-        showInitButton,
-        initializedRef: initializedRef.current,
-        initCalledRef: initCalledRef.current,
-        autoPromptSentRef: autoPromptSentRef.current,
-        autoSendMessageSentRef: autoSendMessageSentRef.current,
+    if (workerStateSaveTimerRef.current) clearTimeout(workerStateSaveTimerRef.current)
+    workerStateSaveTimerRef.current = setTimeout(() => {
+      if (window.__workerStates) {
+        window.__workerStates[tabId] = {
+          history,
+          waiting,
+          initialized,
+          showInitButton,
+          initializedRef: initializedRef.current,
+          initCalledRef: initCalledRef.current,
+          autoPromptSentRef: autoPromptSentRef.current,
+          autoSendMessageSentRef: autoSendMessageSentRef.current,
+        }
       }
-    }
+    }, 500)
+    return () => { if (workerStateSaveTimerRef.current) clearTimeout(workerStateSaveTimerRef.current) }
   }, [tabId, history, waiting, initialized, showInitButton])
 
   const onRefreshRef = useRef(onRefresh)
@@ -202,7 +214,7 @@ export function DroidWorkerBase({
         initializedRef.current = true
         setInitialized(true)
         setWaiting(false)
-        setHistory(prev => [...prev, { role: 'assistant', text: '✓ Droid Ready' }])
+        setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ Droid Ready' }))
         return
       }
 
@@ -213,7 +225,7 @@ export function DroidWorkerBase({
         if (hookSid && mySid && hookSid !== mySid) return
 
         const result = data.last_result || '(no response)'
-        setHistory(prev => [...prev, { role: 'assistant', text: result }])
+        setHistory(prev => cappedHistory(prev, { role: 'assistant', text: result }))
 
         // Capture task ID and waiting state before resetting, then synchronously
         // clear both refs so duplicate Stop events are no-ops.
@@ -362,7 +374,7 @@ export function DroidWorkerBase({
       ? `[Init] Resuming session ...${resumeSessionId.slice(-8)}`
       : '[Init] Starting terminal → cd → droid'
 
-    setHistory(prev => [...prev, { role: 'user', text: initMsg }])
+    setHistory(prev => cappedHistory(prev, { role: 'user', text: initMsg }))
     setWaiting(true)
     setInitialized(false)
 
@@ -390,12 +402,12 @@ export function DroidWorkerBase({
     window.__onChangeCommandCallback[tabId] = (callbackId: string) => {
       if (abortedRef.current) return
       if (callbackId === `${tabId}-shell-ready`) {
-        setHistory(prev => [...prev, { role: 'assistant', text: '✓ Shell ready.' }])
+        setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ Shell ready.' }))
         if (projectPath) {
           window.__onChangeCommandCallback![tabId] = (cbId: string) => {
             if (abortedRef.current) return
             if (cbId === `${tabId}-cd`) {
-              setHistory(prev => [...prev, { role: 'assistant', text: '✓ cd done.' }])
+              setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '✓ cd done.' }))
               startDroid()
             }
           }
@@ -467,7 +479,7 @@ export function DroidWorkerBase({
 
     autoPromptSentRef.current = true
     const prompt = config.autoInitPrompt.replace('{changeId}', changeId || '')
-    setHistory(prev => [...prev, { role: 'user', text: prompt }])
+    setHistory(prev => cappedHistory(prev, { role: 'user', text: prompt }))
     taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setWaiting(true)
     if (projectPath) {
@@ -555,7 +567,7 @@ export function DroidWorkerBase({
       // Otherwise, add to history and set waiting state
       const lastMessage = history[history.length - 1]
       if (!lastMessage || lastMessage.role !== 'user' || lastMessage.text !== pending) {
-        setHistory(prev => [...prev, { role: 'user', text: pending }])
+        setHistory(prev => cappedHistory(prev, { role: 'user', text: pending }))
         taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
         setWaiting(true)
         if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, pending, `Droid Worker (${changeId || 'idle'}) > Send`).catch(() => {})
@@ -567,7 +579,7 @@ export function DroidWorkerBase({
     // Otherwise use the input box message
     const trimmed = message.trim()
     if (!trimmed) return false
-    setHistory(prev => [...prev, { role: 'user', text: trimmed }])
+    setHistory(prev => cappedHistory(prev, { role: 'user', text: trimmed }))
     setMessage('')
     taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setWaiting(true)
@@ -584,7 +596,7 @@ export function DroidWorkerBase({
     taskIdRef.current = null
     setWaiting(false)
     waitingRef.current = false
-    setHistory(prev => [...prev, { role: 'assistant', text: '⏹ Stopped' }])
+    setHistory(prev => cappedHistory(prev, { role: 'assistant', text: '⏹ Stopped' }))
   }
 
   const handleQuickButton = (btn: QuickButton, overrideInput?: string): boolean => {
@@ -600,7 +612,7 @@ export function DroidWorkerBase({
 
     // Fixed prompt
     if (btn.prompt) {
-      setHistory(prev => [...prev, { role: 'user', text: btn.prompt! }])
+      setHistory(prev => cappedHistory(prev, { role: 'user', text: btn.prompt! }))
       taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       setWaiting(true)
       if (projectPath) saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, btn.prompt!, `Droid Worker > ${btn.label}`).catch(() => {})
@@ -617,7 +629,7 @@ export function DroidWorkerBase({
       // CRITICAL: Always use pendingMessageRef + Send button path for all promptTemplate texts.
       // This ensures consistent behavior and avoids Droid CLI's bracketed paste truncation.
       // Set history and waiting state immediately, then trigger send asynchronously.
-      setHistory(prev => [...prev, { role: 'user', text: prompt }])
+      setHistory(prev => cappedHistory(prev, { role: 'user', text: prompt }))
       setMessage('')
       taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       setWaiting(true)
