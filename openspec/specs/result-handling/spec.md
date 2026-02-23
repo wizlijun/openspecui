@@ -1,18 +1,20 @@
 ## ADDED Requirements
 
 ### Requirement: 确认结果发送回 Worker
-用户点击"确认"后，系统 SHALL 将勾选的项目格式化为文本消息，通过现有的 terminal 写入通道发送回 Worker。
+用户点击"确认"后，系统 SHALL 将勾选的项目通过适当的路径发送回 Worker。Droid Worker 和 Codex Worker 使用不同的发送机制以确保文本正确传输。
 
 #### Scenario: Droid Worker 确认结果发送
 - **WHEN** 用户在 Droid Worker 的确认弹窗中勾选了项目并点击"确认"
-- **THEN** 系统 SHALL 通过 `sendToDroid()` 将格式化的确认消息发送到 Droid terminal
+- **THEN** 系统 SHALL 将勾选项填充到 textarea，然后触发 Fix 按钮（与 Self-Review Cycle 调用 triggerFix 逻辑一致）
+- **THEN** Fix 按钮 SHALL 使用 promptTemplate 包装文本，并通过 Send 按钮路径（pendingMessageRef → handleSendMessage → sendToDroid）发送到 Droid terminal
+- **THEN** 此流程确保大段文字通过 sendToDroid 的长文本处理逻辑（>500字符跳过 bracketed paste）正确输入
 
 #### Scenario: Codex Worker 确认结果发送
 - **WHEN** 用户在 Codex Worker 的确认弹窗中勾选了项目并点击"确认"
 - **THEN** 系统 SHALL 通过 `sendToReview()` 将格式化的确认消息发送到 Codex terminal
 
 ### Requirement: 默认确认消息格式
-当未配置自定义响应模板时，系统 SHALL 使用默认格式生成确认消息。
+Droid Worker 的确认消息格式由 Fix 按钮的 `promptTemplate` 决定，勾选项作为 `{input}` 占位符的内容传入。Codex Worker 在未配置自定义响应模板时，使用默认格式生成确认消息。
 
 #### Scenario: 默认格式输出
 - **WHEN** 用户勾选了 "P0: 修复类型错误" 和 "P1: 优化性能" 两项，且未配置自定义模板

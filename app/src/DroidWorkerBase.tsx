@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { saveHistoryEntry } from './inputHistoryService'
 import { MarkdownWithCheckbox } from './MarkdownWithCheckbox'
 import { HumanConfirmationCard } from './HumanConfirmationCard'
-import type { ConfirmationCardConfig, ConfirmationButton, ButtonAction } from './loadConfirmationCardConfig'
+import type { ConfirmationCardConfig, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -510,26 +510,37 @@ export function DroidWorkerBase({
   // NOTE: useCallback must be declared before the early return to maintain
   // consistent hook call order across renders (Rules of Hooks).
 
-  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[], button: ConfirmationButton) => {
+  const handleConfirmationAction = useCallback((action: ButtonAction, selectedItems: string[]) => {
     if (action === 'cancel') {
       setConfirmationData(null)
       return
     }
 
-    // In Droid Worker, all fix actions send to current Droid
-    const template = button.messageTemplate || config.confirmation?.responseTemplate || '根据评审建议修复以下问题：\n{selected_items}'
+    // CRITICAL: Use triggerFix (same as Self-Review Cycle) to ensure proper text handling.
+    // This fills textarea with items and clicks Fix button, which wraps with promptTemplate
+    // and sends via Send button path, avoiding Droid CLI bracketed paste truncation.
     const itemsText = selectedItems.map(item => `- ${item}`).join('\n')
-    const fixMessage = template.replace('{selected_items}', itemsText)
-
-    setHistory(prev => [...prev, { role: 'user', text: fixMessage }])
-    setConfirmationData(null)
-    taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setWaiting(true)
-    if (projectPath) {
-      saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, fixMessage, `Droid Worker > ${button.label}`).catch(() => {})
+    
+    // Find the "fix" role button from config (fallback to label for backward compatibility)
+    const fixButton = config.leftButtons.find(b => b.role === 'fix' && b.promptTemplate)
+      || config.leftButtons.find(b => b.label === 'Fix' && b.promptTemplate)
+    
+    if (!fixButton || !handleQuickButtonRef.current) {
+      console.warn(`[DroidWorkerBase:${tabId}] handleConfirmationAction failed — no Fix button with promptTemplate found`)
+      alert('无法发送修复消息：未找到 Fix 按钮配置，请检查 worker_config.yml')
+      return
     }
-    sendToDroid(fixMessage)
-  }, [config.confirmation?.responseTemplate, changeId, projectPath, sendToDroid])
+    
+    setConfirmationData(null)
+    
+    // Fill textarea with items text, then trigger Fix button on next tick
+    setMessage(itemsText)
+    setTimeout(() => {
+      if (handleQuickButtonRef.current) {
+        handleQuickButtonRef.current(fixButton, undefined)  // undefined = read from textarea
+      }
+    }, 50)
+  }, [config.leftButtons, tabId])
 
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
 

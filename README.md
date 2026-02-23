@@ -46,6 +46,8 @@ Every agent gets a real `zsh` shell through Python's `pty` module. Full ANSI sup
 ### ✋ Human-in-the-Loop Confirmations
 Agent returns a checklist? A beautiful confirmation card pops up. Check what you want. Hit confirm. The agent obeys. You're the boss.
 
+Fix actions from the confirmation card are sent through the Fix button path (fill textarea → trigger Fix button → wrap with promptTemplate → send via Send button), identical to the Self-Review Cycle flow, ensuring long text is correctly delivered to the Droid CLI.
+
 ```
 Agent: "Found 3 issues. Pick which to fix:"
   ☐ P0: Critical type error in auth module
