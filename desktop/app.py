@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OpenSpec Desktop - macOS native app
+Taichi Forge - macOS native app
 - Left: WebView loading the web app
 - Right: xterm.js terminal (real PTY via zsh)
 - Python GUI coordinates web ↔ terminal
@@ -579,7 +579,7 @@ class NativeBridgeHandler(NSObject):
             panel.setCanChooseFiles_(False)
             panel.setCanChooseDirectories_(True)
             panel.setAllowsMultipleSelection_(False)
-            panel.setMessage_("Select OpenSpec directory")
+            panel.setMessage_("Select project directory")
             
             if panel.runModal() == NSModalResponseOK:
                 url = panel.URLs()[0]
@@ -2596,7 +2596,7 @@ class AppDelegate(NSObject):
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(x, y, w, h), style, NSBackingStoreBuffered, False
         )
-        self.window.setTitle_("OpenSpec Desktop")
+        self.window.setTitle_("Taichi Forge")
         self.window.setMinSize_((800, 600))
 
         # Split view - vertical (top: web app, bottom: log)
@@ -2959,7 +2959,7 @@ def main():
     app_menu_item = NSMenuItem.alloc().init()
     menubar.addItem_(app_menu_item)
     app_menu = NSMenu.alloc().init()
-    app_menu.addItemWithTitle_action_keyEquivalent_("Quit OpenSpec", "terminate:", "q")
+    app_menu.addItemWithTitle_action_keyEquivalent_("Quit Taichi Forge", "terminate:", "q")
     app_menu_item.setSubmenu_(app_menu)
 
     # Edit menu
