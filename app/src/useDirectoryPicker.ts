@@ -527,29 +527,7 @@ export async function nativeReadFile(path: string): Promise<string> {
 
 export async function nativeWriteFile(path: string, content: string): Promise<void> {
   if (!window.__nativeBridge) throw new Error('Native bridge not available')
-  
-  // Ensure parent directory exists
-  const lastSlash = path.lastIndexOf('/')
-  if (lastSlash > 0) {
-    const dir = path.substring(0, lastSlash)
-    await new Promise<void>((resolve, reject) => {
-      const callbackId = `mkdir-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-      const timer = setTimeout(() => {
-        unregisterCommandCallback(callbackId)
-        reject(new Error('mkdir timeout'))
-      }, 3000)
-      registerCommandCallback(callbackId, () => {
-        clearTimeout(timer)
-        resolve()
-      })
-      window.__nativeBridge!.runCommandWithCallback(
-        `mkdir -p '${dir.replace(/'/g, "'\\''")}'`,
-        callbackId,
-        'shell'
-      )
-    })
-  }
-  
+  // Python _handle_write_file already creates parent dirs via os.makedirs
   const result = await window.__nativeBridge.writeFile(path, content)
   if (!result.success) throw new Error(result.error || 'Failed to write file')
 }

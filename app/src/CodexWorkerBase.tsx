@@ -177,6 +177,7 @@ export function CodexWorkerBase({
   const initCalledRef = useRef(savedState?.initCalledRef || false)
   const initializedRef = useRef(savedState?.initializedRef || false)
   const autoPromptSentRef = useRef(savedState?.autoPromptSentRef || false)
+  const initTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Tracks whether the first Review has been sent (to distinguish Review vs Review Again) */
   const reviewSentRef = useRef(savedState?.reviewSentRef || false)
   const waitingRef = useRef(false)
@@ -523,7 +524,7 @@ export function CodexWorkerBase({
 
           // Fallback: if codex-notify hook never fires within 120s, fail and require re-init.
           // Clean up the pending token so it doesn't block other tabs.
-          setTimeout(() => {
+          initTimeoutRef.current = setTimeout(() => {
             if (abortedRef.current) return
             if (!initializedRef.current) {
               console.warn('[CodexWorkerBase] codex-notify timeout (120s) — init failed, requiring re-init')
@@ -609,6 +610,11 @@ export function CodexWorkerBase({
       const isClosing = window.__closingTabs?.has(tabId)
       console.warn(`[CodexWorker:${tabId}] ❌ UNMOUNTED — isClosing=${isClosing}, closingTabs=${JSON.stringify([...(window.__closingTabs || [])])}`)
       abortedRef.current = true
+      // Clean up init timeout timer
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current)
+        initTimeoutRef.current = null
+      }
       // Clean up pending token
       if (pendingTokenRef.current) {
         onPendingTokenRef.current?.(null)

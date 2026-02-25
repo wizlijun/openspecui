@@ -484,6 +484,7 @@ class NativeBridgeHandler(NSObject):
                     'pattern': 'shell',
                     'buffer': '',
                     'command': '(shell startup)',
+                    'created_at': time.time(),
                 }
             elif msg_type == 'writeChangeInput':
                 tab_id = msg.get('tabId', '')
@@ -894,15 +895,28 @@ class AppCoordinator:
         self._log_entry_count = 0
         self._terminal_ready = False
         self._review_terminal_ready = False
-        self._pending_callbacks = {}  # {callback_id: {'pattern': 'shell'|'droid', 'buffer': ''}}
-        self._review_pending_callbacks = {}  # {callback_id: {'pattern': 'shell'|'droid', 'buffer': ''}}
+        self._pending_callbacks = {}  # {callback_id: {'pattern': 'shell'|'droid', 'buffer': '', 'created_at': float}}
+        self._review_pending_callbacks = {}  # {callback_id: {'pattern': 'shell'|'droid', 'buffer': '', 'created_at': float}}
         self._change_pending_callbacks = {}  # {tab_id: {callback_id: {...}}}
-        self._output_buffer = ''
+        self._CB_MAX_BUFFER = 512 * 1024  # 512KB max per callback buffer
+        self._CB_TIMEOUT_SECS = 300  # 5 min timeout for stale callbacks
         # Track active sessions for persistence
         self.active_change_sessions = {}  # {tab_id: {'sessionId': str, 'changeId': str|None}}
         self.active_codex_sessions = {}  # {tab_id: {'sessionId': str, 'changeId': str|None}}
         # Track active Auto Fix windows
         self._autofix_windows = set()
+        self._start_callback_purge_timer()
+        # Batched terminal output forwarding to reduce evaluateJavaScript pressure
+        self._main_output_batch = bytearray()
+        self._main_output_lock = threading.Lock()
+        self._main_output_scheduled = False
+        self._review_output_batch = bytearray()
+        self._review_output_lock = threading.Lock()
+        self._review_output_scheduled = False
+        self._change_output_batches = {}  # {tab_id: bytearray}
+        self._change_output_locks = {}    # {tab_id: Lock}
+        self._change_output_scheduled = {}  # {tab_id: bool}
+        self._BATCH_INTERVAL = 0.016  # ~60fps
 
     # ─── Log Panel (NSTextView) ─────────────────────────────────────
 
@@ -1007,6 +1021,7 @@ class AppCoordinator:
             'pattern': prompt_pattern,
             'buffer': '',
             'command': command,
+            'created_at': time.time(),
         }
         self.log('send', 'runCommandWithCallback', f'{command}  [cb={callback_id}, wait={prompt_pattern}]')
         self.terminal.write((command + '\n').encode('utf-8'))
@@ -1026,6 +1041,52 @@ class AppCoordinator:
     # Droid prompt patterns: ends with >, ❯, or contains "How can I help"
     _droid_prompt_re = re.compile(r'[>❯]\s*$|How can I help')
 
+    def _cap_callback_buffer(self, cb_info):
+        """Cap callback buffer to prevent unbounded memory growth.
+        Only keeps the tail portion needed for prompt detection."""
+        buf = cb_info['buffer']
+        if len(buf) > self._CB_MAX_BUFFER:
+            cb_info['buffer'] = buf[-self._CB_MAX_BUFFER:]
+
+    def _purge_stale_callbacks(self):
+        """Remove callbacks that have been pending longer than _CB_TIMEOUT_SECS."""
+        now = time.time()
+        timeout = self._CB_TIMEOUT_SECS
+
+        stale = [k for k, v in self._pending_callbacks.items()
+                 if now - v.get('created_at', now) > timeout]
+        for k in stale:
+            self.log('warn', 'purge_stale_callback', f'main: {k}')
+            del self._pending_callbacks[k]
+
+        stale = [k for k, v in self._review_pending_callbacks.items()
+                 if now - v.get('created_at', now) > timeout]
+        for k in stale:
+            self.log('warn', 'purge_stale_callback', f'review: {k}')
+            del self._review_pending_callbacks[k]
+
+        for tab_id in list(self._change_pending_callbacks):
+            cbs = self._change_pending_callbacks[tab_id]
+            stale = [k for k, v in cbs.items()
+                     if now - v.get('created_at', now) > timeout]
+            for k in stale:
+                self.log('warn', 'purge_stale_callback', f'change[{tab_id}]: {k}')
+                del cbs[k]
+            if not cbs:
+                del self._change_pending_callbacks[tab_id]
+
+    def _start_callback_purge_timer(self):
+        """Start a periodic timer to purge stale callbacks every 60s."""
+        def purge_loop():
+            while True:
+                time.sleep(60)
+                try:
+                    self._purge_stale_callbacks()
+                except Exception as e:
+                    print(f"[CallbackPurge] error: {e}")
+        t = threading.Thread(target=purge_loop, daemon=True)
+        t.start()
+
     def _on_terminal_output(self, data: bytes):
         self._send_to_webview(data)
 
@@ -1040,6 +1101,7 @@ class AppCoordinator:
             completed = []
             for cb_id, cb_info in self._pending_callbacks.items():
                 cb_info['buffer'] += text
+                self._cap_callback_buffer(cb_info)
                 # Strip ANSI escape sequences for clean prompt detection
                 clean = self._ansi_re.sub('', cb_info['buffer'])
                 # Only check the last 200 chars to avoid false matches on old output
@@ -1085,20 +1147,31 @@ class AppCoordinator:
     def _send_to_webview(self, data: bytes):
         if not self.webview:
             return
-        b64 = base64.b64encode(data).decode('ascii')
-        js = f"""
-        if (window.__onTerminalOutputBytes) {{
-            window.__onTerminalOutputBytes('{b64}');
-        }} else if (window.__onTerminalOutput) {{
-            var b = atob('{b64}');
-            var a = new Uint8Array(b.length);
-            for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
-            window.__onTerminalOutput(new TextDecoder().decode(a));
-        }}
-        """
-        def do_eval():
-            self.webview.evaluateJavaScript_completionHandler_(js, None)
-        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+        with self._main_output_lock:
+            self._main_output_batch.extend(data)
+            if self._main_output_scheduled:
+                return
+            self._main_output_scheduled = True
+
+        def flush():
+            with self._main_output_lock:
+                if not self._main_output_batch:
+                    self._main_output_scheduled = False
+                    return
+                chunk = bytes(self._main_output_batch)
+                self._main_output_batch.clear()
+                self._main_output_scheduled = False
+            b64 = base64.b64encode(chunk).decode('ascii')
+            js = f"""
+            if (window.__onTerminalOutputBytes) {{
+                window.__onTerminalOutputBytes('{b64}');
+            }}
+            """
+            def do_eval():
+                self.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+        threading.Timer(self._BATCH_INTERVAL, flush).start()
 
     # ─── Review Terminal ──────────────────────────────────────────
 
@@ -1121,6 +1194,7 @@ class AppCoordinator:
             'pattern': prompt_pattern,
             'buffer': '',
             'command': command,
+            'created_at': time.time(),
         }
         self.log('send', 'runReviewCommandWithCallback', f'{command}  [cb={callback_id}, wait={prompt_pattern}]')
         self.review_terminal.write((command + '\n').encode('utf-8'))
@@ -1143,23 +1217,33 @@ class AppCoordinator:
             self.review_terminal.resize(cols, rows)
 
     def _on_review_terminal_output(self, data: bytes):
-        """Send review terminal output to the web app."""
+        """Send review terminal output to the web app (batched)."""
         if not self.webview:
             return
-        b64 = base64.b64encode(data).decode('ascii')
-        js = f"""
-        if (window.__onReviewTerminalOutputBytes) {{
-            window.__onReviewTerminalOutputBytes('{b64}');
-        }} else if (window.__onReviewTerminalOutput) {{
-            var b = atob('{b64}');
-            var a = new Uint8Array(b.length);
-            for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
-            window.__onReviewTerminalOutput(new TextDecoder().decode(a));
-        }}
-        """
-        def do_eval():
-            self.webview.evaluateJavaScript_completionHandler_(js, None)
-        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+        # Batched forwarding to webview
+        with self._review_output_lock:
+            self._review_output_batch.extend(data)
+            if not self._review_output_scheduled:
+                self._review_output_scheduled = True
+                def flush_review():
+                    with self._review_output_lock:
+                        if not self._review_output_batch:
+                            self._review_output_scheduled = False
+                            return
+                        chunk = bytes(self._review_output_batch)
+                        self._review_output_batch.clear()
+                        self._review_output_scheduled = False
+                    b64 = base64.b64encode(chunk).decode('ascii')
+                    js = f"""
+                    if (window.__onReviewTerminalOutputBytes) {{
+                        window.__onReviewTerminalOutputBytes('{b64}');
+                    }}
+                    """
+                    def do_eval():
+                        self.webview.evaluateJavaScript_completionHandler_(js, None)
+                    NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+                threading.Timer(self._BATCH_INTERVAL, flush_review).start()
 
         # Check pending review callbacks for prompt detection
         if self._review_pending_callbacks:
@@ -1171,6 +1255,7 @@ class AppCoordinator:
             completed = []
             for cb_id, cb_info in self._review_pending_callbacks.items():
                 cb_info['buffer'] += text
+                self._cap_callback_buffer(cb_info)
                 clean = self._ansi_re.sub('', cb_info['buffer'])
                 tail = clean[-200:]
 
@@ -1245,6 +1330,7 @@ class AppCoordinator:
             'pattern': prompt_pattern,
             'buffer': '',
             'command': command,
+            'created_at': time.time(),
         }
         self.log('send', 'runChangeCommandWithCallback', f'tab={tab_id}, cmd={command}, cb={callback_id}')
         if tab_id in self.change_terminals:
@@ -1264,6 +1350,10 @@ class AppCoordinator:
             self.log('warn', 'stop_change_terminal', f'tab={tab_id}, terminal NOT FOUND')
         if tab_id in self._change_pending_callbacks:
             del self._change_pending_callbacks[tab_id]
+        # Clean up batched output state
+        self._change_output_batches.pop(tab_id, None)
+        self._change_output_locks.pop(tab_id, None)
+        self._change_output_scheduled.pop(tab_id, None)
 
     def resize_change_terminal(self, tab_id: str, cols: int, rows: int):
         """Resize a change terminal."""
@@ -1271,24 +1361,44 @@ class AppCoordinator:
             self.change_terminals[tab_id].resize(cols, rows)
 
     def _on_change_terminal_output(self, tab_id: str, data: bytes):
-        """Send change terminal output to the web app."""
+        """Send change terminal output to the web app (batched)."""
         if not self.webview:
             return
-        b64 = base64.b64encode(data).decode('ascii')
-        safe_tab_id = tab_id.replace('\\', '\\\\').replace("'", "\\'")
-        js = f"""
-        if (window.__onChangeTerminalOutputBytes && window.__onChangeTerminalOutputBytes['{safe_tab_id}']) {{
-            window.__onChangeTerminalOutputBytes['{safe_tab_id}']('{b64}');
-        }} else if (window.__onChangeTerminalOutput && window.__onChangeTerminalOutput['{safe_tab_id}']) {{
-            var b = atob('{b64}');
-            var a = new Uint8Array(b.length);
-            for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
-            window.__onChangeTerminalOutput['{safe_tab_id}'](new TextDecoder().decode(a));
-        }}
-        """
-        def do_eval():
-            self.webview.evaluateJavaScript_completionHandler_(js, None)
-        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+        # Batched forwarding to webview
+        if tab_id not in self._change_output_locks:
+            self._change_output_locks[tab_id] = threading.Lock()
+            self._change_output_batches[tab_id] = bytearray()
+            self._change_output_scheduled[tab_id] = False
+
+        lock = self._change_output_locks[tab_id]
+        with lock:
+            self._change_output_batches[tab_id].extend(data)
+            if not self._change_output_scheduled.get(tab_id, False):
+                self._change_output_scheduled[tab_id] = True
+                safe_tab_id = tab_id.replace('\\', '\\\\').replace("'", "\\'")
+                def flush_change(tid=tab_id, stid=safe_tab_id):
+                    lk = self._change_output_locks.get(tid)
+                    if not lk:
+                        return
+                    with lk:
+                        batch = self._change_output_batches.get(tid)
+                        if not batch:
+                            self._change_output_scheduled[tid] = False
+                            return
+                        chunk = bytes(batch)
+                        batch.clear()
+                        self._change_output_scheduled[tid] = False
+                    b64 = base64.b64encode(chunk).decode('ascii')
+                    js = f"""
+                    if (window.__onChangeTerminalOutputBytes && window.__onChangeTerminalOutputBytes['{stid}']) {{
+                        window.__onChangeTerminalOutputBytes['{stid}']('{b64}');
+                    }}
+                    """
+                    def do_eval():
+                        self.webview.evaluateJavaScript_completionHandler_(js, None)
+                    NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+                threading.Timer(self._BATCH_INTERVAL, flush_change).start()
 
         # Check pending callbacks for prompt detection
         if tab_id in self._change_pending_callbacks and self._change_pending_callbacks[tab_id]:
@@ -1300,6 +1410,7 @@ class AppCoordinator:
             completed = []
             for cb_id, cb_info in self._change_pending_callbacks[tab_id].items():
                 cb_info['buffer'] += text
+                self._cap_callback_buffer(cb_info)
                 clean = self._ansi_re.sub('', cb_info['buffer'])
                 tail = clean[-200:]
 

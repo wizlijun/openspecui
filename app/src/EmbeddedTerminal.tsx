@@ -40,7 +40,7 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
       lineHeight: 1.0,
       letterSpacing: 0,
       allowProposedApi: true,
-      scrollback: 10000,
+      scrollback: 3000,
       tabStopWidth: 8,
       convertEol: false,
       windowsMode: false,
