@@ -264,20 +264,13 @@ export function DroidWorkerBase({
   }, [bridge, tabId])
 
   const sendToDroid = useCallback((text: string) => {
-    // CRITICAL: Droid CLI truncates long bracketed paste inputs (displays as "... N lines]").
-    // For long texts (>500 chars), send directly without bracketed paste mode.
-    // Droid will still receive the full text, just without paste mode optimizations.
-    if (text.length > 500) {
-      // Long text: send directly without bracketed paste
-      writeToTerminal(text)
-      setTimeout(() => writeToTerminal('\r'), 100)
-      setTimeout(() => writeToTerminal('\r'), 300)
-    } else {
-      // Short text: use bracketed paste mode for better handling
-      writeToTerminal(`\x1b[200~${text}\x1b[201~`)
-      setTimeout(() => writeToTerminal('\r'), 100)
-      setTimeout(() => writeToTerminal('\r'), 300)
-    }
+    // Copy to clipboard first, then paste via bracketed paste mode.
+    // This ensures consistent behavior with Cmd+V paste and avoids
+    // slow character-by-character processing by the shell.
+    navigator.clipboard.writeText(text).catch(() => {})
+    writeToTerminal(`\x1b[200~${text}\x1b[201~`)
+    setTimeout(() => writeToTerminal('\r'), 100)
+    setTimeout(() => writeToTerminal('\r'), 300)
   }, [writeToTerminal])
 
   // Register sendMessage function for external injection (Droid Fix from Codex Worker)
