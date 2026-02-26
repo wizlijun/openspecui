@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Taichi Forge - macOS native app
+YinYang Spec - macOS native app
 - Left: WebView loading the web app
 - Right: xterm.js terminal (real PTY via zsh)
 - Python GUI coordinates web ↔ terminal
@@ -2596,7 +2596,7 @@ class AppDelegate(NSObject):
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(x, y, w, h), style, NSBackingStoreBuffered, False
         )
-        self.window.setTitle_("Taichi Forge")
+        self.window.setTitle_("YinYang Spec")
         self.window.setMinSize_((800, 600))
 
         # Split view - vertical (top: web app, bottom: log)
@@ -2959,7 +2959,7 @@ def main():
     app_menu_item = NSMenuItem.alloc().init()
     menubar.addItem_(app_menu_item)
     app_menu = NSMenu.alloc().init()
-    app_menu.addItemWithTitle_action_keyEquivalent_("Quit Taichi Forge", "terminate:", "q")
+    app_menu.addItemWithTitle_action_keyEquivalent_("Quit YinYang Spec", "terminate:", "q")
     app_menu_item.setSubmenu_(app_menu)
 
     # Edit menu

@@ -1,4 +1,4 @@
-# 🔥 Taichi Forge
+# 🔥 YinYang Spec
 
 > **"The future of coding isn't writing code. It's commanding an army of AI agents to do it for you."**
 
@@ -11,7 +11,7 @@
 
 ## 💀 What the hell is this?
 
-Taichi Forge is a **CRAZY** native macOS desktop app that throws AI agents into real terminal sessions and lets them go absolutely wild on your codebase — while YOU hold the leash.
+YinYang Spec is a **CRAZY** native macOS desktop app that throws AI agents into real terminal sessions and lets them go absolutely wild on your codebase — while YOU hold the leash.
 
 No sandboxes. No toy terminals. No bullshit.
 
@@ -25,7 +25,7 @@ You type a sentence. AI agents write the code, review the code, fix the code, an
 
 ## 🤯 Why Should You Care?
 
-| Traditional Dev | With Taichi Forge |
+| Traditional Dev | With YinYang Spec |
 |---|---|
 | You write code | AI writes code, you approve |
 | You review PRs | AI reviews PRs, you confirm |
@@ -239,7 +239,7 @@ openspecui/
 
 ## 🎭 The Philosophy
 
-Most AI coding tools treat you like a passenger. Taichi Forge treats you like a **general**.
+Most AI coding tools treat you like a passenger. YinYang Spec treats you like a **general**.
 
 You define the strategy. AI agents execute the tactics. When they need a decision, they come to you. When they're done, they report back. You approve, reject, or redirect.
 
