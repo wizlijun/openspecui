@@ -1,5 +1,9 @@
 # ☯️ YinYang Spec: The AI Coding IDE
 
+<p align="center">
+  <img src="desktop/yinyang_icon.png" width="200" alt="YinYang Spec Icon">
+</p>
+
 > **"The future of coding isn't writing code. It's commanding an army of AI agents to do it for you."**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

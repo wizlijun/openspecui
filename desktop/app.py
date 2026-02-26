@@ -2891,6 +2891,77 @@ class AppDelegate(NSObject):
         config['logPanelVisible'] = self.log_visible
         save_config(config)
 
+    def showAbout_(self, sender):
+        """Show About panel with large app icon."""
+        from AppKit import NSImage, NSImageView, NSTextField
+        from Cocoa import NSPanel, NSMakeRect, NSWindowStyleMaskTitled, NSWindowStyleMaskClosable, NSBackingStoreBuffered, NSFont, NSColor, NSView
+
+        panel_w, panel_h = 360, 320
+        screen = NSScreen.mainScreen().frame()
+        px = (screen.size.width - panel_w) / 2
+        py = (screen.size.height - panel_h) / 2
+
+        panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(px, py, panel_w, panel_h),
+            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
+            NSBackingStoreBuffered, False
+        )
+        panel.setTitle_("About YinYang Spec")
+
+        content = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, panel_w, panel_h))
+
+        # App icon (128x128) from yinyang_icon.png
+        icon_size = 128
+        icon_x = (panel_w - icon_size) / 2
+        icon_view = NSImageView.alloc().initWithFrame_(NSMakeRect(icon_x, panel_h - icon_size - 30, icon_size, icon_size))
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yinyang_icon.png')
+        if os.path.exists(icon_path):
+            icon_img = NSImage.alloc().initWithContentsOfFile_(icon_path)
+            icon_view.setImage_(icon_img)
+        content.addSubview_(icon_view)
+
+        # App name
+        name_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, panel_h - icon_size - 70, panel_w, 28))
+        name_label.setStringValue_("YinYang Spec")
+        name_label.setFont_(NSFont.boldSystemFontOfSize_(18))
+        name_label.setAlignment_(1)  # center
+        name_label.setBezeled_(False)
+        name_label.setDrawsBackground_(False)
+        name_label.setEditable_(False)
+        name_label.setSelectable_(False)
+        content.addSubview_(name_label)
+
+        # Subtitle
+        sub_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, panel_h - icon_size - 95, panel_w, 20))
+        sub_label.setStringValue_("The AI Coding IDE")
+        sub_label.setFont_(NSFont.systemFontOfSize_(13))
+        sub_label.setTextColor_(NSColor.secondaryLabelColor())
+        sub_label.setAlignment_(1)
+        sub_label.setBezeled_(False)
+        sub_label.setDrawsBackground_(False)
+        sub_label.setEditable_(False)
+        sub_label.setSelectable_(False)
+        content.addSubview_(sub_label)
+
+        # Version
+        ver_label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, panel_h - icon_size - 120, panel_w, 20))
+        ver_label.setStringValue_("Version 1.0.0")
+        ver_label.setFont_(NSFont.systemFontOfSize_(11))
+        ver_label.setTextColor_(NSColor.tertiaryLabelColor())
+        ver_label.setAlignment_(1)
+        ver_label.setBezeled_(False)
+        ver_label.setDrawsBackground_(False)
+        ver_label.setEditable_(False)
+        ver_label.setSelectable_(False)
+        content.addSubview_(ver_label)
+
+        panel.setContentView_(content)
+        panel.makeKeyAndOrderFront_(None)
+        # Retain panel to prevent deallocation
+        if not hasattr(self, '_about_panel'):
+            self._about_panel = None
+        self._about_panel = panel
+
     def applicationShouldTerminateAfterLastWindowClosed_(self, app):
         return True
 
@@ -2949,8 +3020,23 @@ class AppDelegate(NSObject):
 
 
 def main():
+    # Set process name and bundle name so macOS menu bar shows "YinYang Spec" instead of "Python"
+    from Foundation import NSProcessInfo, NSBundle
+    NSProcessInfo.processInfo().setProcessName_("YinYang Spec")
+    bundle = NSBundle.mainBundle()
+    info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+    if info:
+        info['CFBundleName'] = 'YinYang Spec'
+
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+
+    # Set application icon
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'YinYangSpec.icns')
+    if os.path.exists(icon_path):
+        from AppKit import NSImage
+        icon = NSImage.alloc().initWithContentsOfFile_(icon_path)
+        app.setApplicationIconImage_(icon)
 
     # ─── Menu Bar (required for Cmd+C/V/X/A to work in WebView) ───
     menubar = NSMenu.alloc().init()
@@ -2958,8 +3044,10 @@ def main():
     # App menu
     app_menu_item = NSMenuItem.alloc().init()
     menubar.addItem_(app_menu_item)
-    app_menu = NSMenu.alloc().init()
-    app_menu.addItemWithTitle_action_keyEquivalent_("Quit YinYang Spec", "terminate:", "q")
+    app_menu = NSMenu.alloc().initWithTitle_("YinYang Spec")
+    app_menu.addItemWithTitle_action_keyEquivalent_("About", "showAbout:", "")
+    app_menu.addItem_(NSMenuItem.separatorItem())
+    app_menu.addItemWithTitle_action_keyEquivalent_("Quit", "terminate:", "q")
     app_menu_item.setSubmenu_(app_menu)
 
     # Edit menu

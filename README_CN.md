@@ -1,5 +1,9 @@
 # ☯️ YinYang Spec: The AI Coding IDE
 
+<p align="center">
+  <img src="desktop/yinyang_icon.png" width="200" alt="YinYang Spec Icon">
+</p>
+
 > **"编程的未来不是写代码，而是指挥一支 AI 军团替你写。"**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
