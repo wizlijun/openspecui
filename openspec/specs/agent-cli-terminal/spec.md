@@ -37,6 +37,18 @@ The user SHALL be able to show and hide the agent CLI panel to maximize canvas/e
 - **WHEN** the user clicks the toggle button while the panel is visible
 - **THEN** the panel SHALL be hidden and the canvas/editor SHALL expand to fill the space
 
+### Requirement: Paste text using bracketed paste mode
+When the user pastes text (Cmd+V / Ctrl+V) into the terminal, the pasted content SHALL be wrapped in bracketed paste mode escape sequences (`\x1b[200~...\x1b[201~`) before being sent to the PTY. This ensures the shell treats the pasted text as a single block rather than processing each character individually, preventing slow paste performance.
+
+#### Scenario: Paste into terminal
+- **WHEN** the user presses Cmd+V (or Ctrl+V) in the terminal
+- **THEN** the clipboard text SHALL be wrapped in bracketed paste escape sequences
+- **THEN** the wrapped text SHALL be sent to the corresponding PTY channel (main, droid/codex worker, or review)
+
+#### Scenario: Large text paste performance
+- **WHEN** the user pastes a large block of text (e.g. >500 characters)
+- **THEN** the paste SHALL complete without noticeable delay because the shell processes it as a single paste event
+
 ### Requirement: Resize agent panel height
 The user SHALL be able to drag the top edge of the agent panel to resize its height.
 

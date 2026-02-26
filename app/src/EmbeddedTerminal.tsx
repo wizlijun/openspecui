@@ -226,20 +226,23 @@ export function EmbeddedTerminal({ channel = 'main', tabId }: EmbeddedTerminalPr
             console.error('Failed to copy:', err)
           })
         } else if (e.key === 'v') {
-          // Paste from clipboard
+          // Paste from clipboard — wrap in bracketed paste mode so the
+          // shell/application treats the text as a single block instead of
+          // processing each character individually (which is very slow).
           e.preventDefault()
           navigator.clipboard.readText().then(text => {
+            const wrapped = `\x1b[200~${text}\x1b[201~`
             if (channel === 'main') {
               if (window.webkit?.messageHandlers?.terminalInput) {
-                window.webkit.messageHandlers.terminalInput.postMessage(text)
+                window.webkit.messageHandlers.terminalInput.postMessage(wrapped)
               }
             } else if ((channel === 'droid' || channel === 'codex') && tabId) {
               if (window.__nativeBridge) {
-                window.__nativeBridge.writeChangeInput(tabId, text)
+                window.__nativeBridge.writeChangeInput(tabId, wrapped)
               }
             } else {
               if (window.__nativeBridge) {
-                window.__nativeBridge.writeReviewInput(text)
+                window.__nativeBridge.writeReviewInput(wrapped)
               }
             }
           }).catch(err => {
