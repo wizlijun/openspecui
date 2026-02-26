@@ -1,4 +1,4 @@
-# 🔥 YinYang Spec
+# ☯️ YinYang Spec: The AI Coding IDE
 
 > **"编程的未来不是写代码，而是指挥一支 AI 军团替你写。"**
 
