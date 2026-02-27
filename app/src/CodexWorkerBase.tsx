@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { saveHistoryEntry } from './inputHistoryService'
 import { MarkdownWithCheckbox } from './MarkdownWithCheckbox'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import { HumanConfirmationCard } from './HumanConfirmationCard'
 import type { ConfirmationCardConfig, ConfirmationButton, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
@@ -868,7 +869,9 @@ export function CodexWorkerBase({
                 <span className="wizard-msg-role">{h.role === 'user' ? '▶' : '◀'}</span>
                 {h.role === 'assistant' && /- \[[ x]\]/i.test(h.text)
                   ? <MarkdownWithCheckbox text={h.text} className="wizard-msg-text" />
-                  : <pre className="wizard-msg-text">{h.text}</pre>
+                  : h.role === 'assistant'
+                    ? <MarkdownRenderer text={h.text} className="wizard-msg-text" />
+                    : <pre className="wizard-msg-text">{h.text}</pre>
                 }
                 {scenarioKey && (
                   <button

@@ -336,6 +336,122 @@ html, body, #root {
   accent-color: #1a73e8;
 }
 
+/* Markdown body styles for assistant messages */
+.wizard-msg-text.markdown-body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.wizard-msg-text.markdown-body p {
+  margin: 0 0 8px;
+}
+
+.wizard-msg-text.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.wizard-msg-text.markdown-body h1,
+.wizard-msg-text.markdown-body h2,
+.wizard-msg-text.markdown-body h3,
+.wizard-msg-text.markdown-body h4,
+.wizard-msg-text.markdown-body h5,
+.wizard-msg-text.markdown-body h6 {
+  margin: 12px 0 6px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.wizard-msg-text.markdown-body h1 { font-size: 1.4em; }
+.wizard-msg-text.markdown-body h2 { font-size: 1.25em; }
+.wizard-msg-text.markdown-body h3 { font-size: 1.1em; }
+
+.wizard-msg-text.markdown-body code {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.9em;
+}
+
+.wizard-msg-text.markdown-body pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 10px 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 8px 0;
+  border: none;
+}
+
+.wizard-msg-text.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: 12px;
+}
+
+.wizard-msg-text.markdown-body ul,
+.wizard-msg-text.markdown-body ol {
+  padding-left: 20px;
+  margin: 4px 0 8px;
+}
+
+.wizard-msg-text.markdown-body li {
+  margin-bottom: 2px;
+}
+
+.wizard-msg-text.markdown-body blockquote {
+  border-left: 3px solid #1a73e8;
+  margin: 8px 0;
+  padding: 4px 12px;
+  color: #555;
+  background: #f5f8ff;
+}
+
+.wizard-msg-text.markdown-body table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+}
+
+.wizard-msg-text.markdown-body th,
+.wizard-msg-text.markdown-body td {
+  border: 1px solid #ddd;
+  padding: 4px 8px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.wizard-msg-text.markdown-body th {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+.wizard-msg-text.markdown-body hr {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 10px 0;
+}
+
+.wizard-msg-text.markdown-body a {
+  color: #1a73e8;
+  text-decoration: none;
+}
+
+.wizard-msg-text.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.wizard-msg-text.markdown-body strong {
+  font-weight: 600;
+}
+
+.wizard-msg-text.markdown-body img {
+  max-width: 100%;
+}
+
 .wizard-spinner {
   display: inline-block;
   width: 14px;

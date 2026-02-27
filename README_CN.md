@@ -47,6 +47,9 @@ YinYang Spec 是一个 **疯狂的** macOS 原生桌面应用，它把 AI 智能
 ### 💻 真终端，不是玩具
 每个智能体都通过 Python 的 `pty` 模块获得一个真实的 `zsh` shell。完整 ANSI 支持。完整 shell 能力。前端用 `xterm.js`。货真价实。
 
+### 📝 富 Markdown 渲染
+智能体的回复以 **完整 Markdown** 格式渲染——标题、代码块（暗色主题高亮）、列表、表格、引用、链接等一应俱全。不用再盯着一堵文字墙了。基于 `react-markdown` + `remark-gfm`。
+
 ### ✋ 人机协同确认
 智能体返回一个清单？一张漂亮的确认卡片弹出来。勾选你想要的。点确认。智能体服从。你是老板。
 
@@ -225,6 +228,7 @@ openspecui/
 │       ├── App.tsx                    # 指挥中心
 │       ├── DroidWorkerBase.tsx        # Droid 智能体 UI
 │       ├── CodexWorkerBase.tsx        # Codex 智能体 UI
+│       ├── MarkdownRenderer.tsx       # 智能体回复的 Markdown 渲染
 │       ├── HumanConfirmationCard.tsx  # 人机协同
 │       ├── EmbeddedTerminal.tsx       # xterm.js 封装
 │       └── TreeView.tsx               # 文件树

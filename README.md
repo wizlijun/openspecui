@@ -47,6 +47,9 @@ Run **Droid Workers** (builders) and **Codex Workers** (reviewers) simultaneousl
 ### 💻 Real Terminal, Not a Toy
 Every agent gets a real `zsh` shell through Python's `pty` module. Full ANSI support. Full shell power. `xterm.js` on the frontend. It's the real deal.
 
+### 📝 Rich Markdown Rendering
+Agent responses are rendered as **full Markdown** — headers, code blocks (with syntax-highlighted dark theme), lists, tables, blockquotes, links, and more. No more squinting at raw text walls. Powered by `react-markdown` + `remark-gfm`.
+
 ### ✋ Human-in-the-Loop Confirmations
 Agent returns a checklist? A beautiful confirmation card pops up. Check what you want. Hit confirm. The agent obeys. You're the boss.
 
@@ -225,6 +228,7 @@ openspecui/
 │       ├── App.tsx                    # Command center
 │       ├── DroidWorkerBase.tsx        # Droid agent UI
 │       ├── CodexWorkerBase.tsx        # Codex agent UI
+│       ├── MarkdownRenderer.tsx       # Markdown rendering for agent responses
 │       ├── HumanConfirmationCard.tsx  # Human-in-the-loop
 │       ├── EmbeddedTerminal.tsx       # xterm.js wrapper
 │       └── TreeView.tsx               # File tree
