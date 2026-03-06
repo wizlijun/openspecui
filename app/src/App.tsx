@@ -21,7 +21,7 @@ import { saveReviewEntry, startCommitPolling, stopCommitPolling } from './review
 import { decideAutoFixNext } from './autoFixStateMachine'
 
 // Tab types
-type TabType = 'viewer' | 'change' | 'codex'
+type TabType = 'viewer' | 'change' | 'codex' | 'ops-agent'
 
 interface ChangeTab {
   id: string
@@ -36,6 +36,11 @@ interface CodexTab {
   changeId?: string  // Optional: if provided, context is for this change
   resumeSessionId?: string  // If provided, resume existing session
   disableAutoInitPrompt?: boolean  // If true, skip auto-sending config.autoInitPrompt (used by Self-Review Cycle)
+}
+
+interface OpsAgentTab {
+  id: string
+  htmlContent: string
 }
 
 const formatSessionDisplay = (sessionId: string): string => {
@@ -65,6 +70,8 @@ function App() {
   const [activeChangeTabId, setActiveChangeTabId] = useState<string | null>(null)
   const [codexTabs, setCodexTabsRaw] = useState<CodexTab[]>([])
   const [activeCodexTabId, setActiveCodexTabId] = useState<string | null>(null)
+  const [opsAgentTabs, setOpsAgentTabs] = useState<OpsAgentTab[]>([])
+  const [activeOpsAgentTabId, setActiveOpsAgentTabId] = useState<string | null>(null)
 
   // Wrap tab setters with logging
   const setChangeTabs: typeof setChangeTabsRaw = useCallback((action) => {
@@ -118,6 +125,8 @@ function App() {
   // Bidirectional worker binding: Codex Worker ↔ Droid Worker (by tabId/workerId)
   const codexToDroidRef = useRef<Map<string, string>>(new Map())  // codexTabId → droidTabId
   const droidToCodexRef = useRef<Map<string, string>>(new Map())  // droidTabId → codexTabId
+  // Ops Agent to Droid Worker binding: each Ops Agent tab has one bound worker
+  const opsAgentToDroidRef = useRef<Map<string, string>>(new Map())  // opsAgentTabId → droidTabId
   // Auto Fix loop state: tracks which Codex Workers are in Auto Fix mode
   const [autoFixActiveMap, setAutoFixActiveMap] = useState<Map<string, { active: boolean; cycleCount: number; stage: 'fixing' | 'reviewing' }>>(new Map())
   // Refs for triggering re-review on Codex Workers (set by CodexWorkerBase)
@@ -596,6 +605,90 @@ function App() {
     }
   }, [])
 
+  // ─── Ops Agent Tab Creation Handler ──────────────────────────────
+  useEffect(() => {
+    if (!window.__isNativeApp) return
+
+    window.__createOpsAgentTab = (htmlContent: string) => {
+      const tabId = `ops-agent-${Date.now()}`
+      console.log(`[OpsAgent] Creating Ops Agent tab: ${tabId}`)
+      setOpsAgentTabs(prev => [...prev, { id: tabId, htmlContent }])
+      setActiveOpsAgentTabId(tabId)
+      
+      // Inject tab ID into the HTML content so it can be used by the Ops Agent panel
+      const injectedHtml = htmlContent.replace(
+        'window.__opsAgentProjectPath',
+        `window.__opsAgentTabId = ${JSON.stringify(tabId)};\nwindow.__opsAgentProjectPath`
+      )
+      setOpsAgentTabs(prev => prev.map(t => t.id === tabId ? { ...t, htmlContent: injectedHtml } : t))
+    }
+
+    window.__switchToOpsAgent = () => {
+      if (opsAgentTabs.length > 0) {
+        setActiveOpsAgentTabId(opsAgentTabs[0].id)
+        setActiveTab('ops-agent')
+        console.log(`[OpsAgent] Switched to Ops Agent tab`)
+      } else {
+        console.warn(`[OpsAgent] No Ops Agent tabs available`)
+      }
+    }
+
+    window.__createOpsAgentWorker = (data: any) => {
+      const { opsAgentTabId, autoSendMessage } = data
+      console.log(`[OpsAgent] Creating/reusing Droid Worker for Ops Agent tab: ${opsAgentTabId}`)
+      
+      // Check if this Ops Agent already has a bound worker
+      const existingWorkerId = opsAgentToDroidRef.current.get(opsAgentTabId)
+      if (existingWorkerId) {
+        // Check if the worker tab still exists
+        const workerExists = changeTabs.some(t => t.id === existingWorkerId)
+        if (workerExists) {
+          console.log(`[OpsAgent] Reusing existing worker: ${existingWorkerId}`)
+          // Switch to the existing worker tab
+          setActiveChangeTabId(existingWorkerId)
+          setActiveTab('change')
+          
+          // If there's a new auto-send message, update it
+          if (autoSendMessage) {
+            setChangeAutoSendMessages(prev => new Map(prev).set(existingWorkerId, autoSendMessage))
+          }
+          return
+        } else {
+          // Worker was closed, remove stale binding
+          console.log(`[OpsAgent] Worker ${existingWorkerId} no longer exists, creating new one`)
+          opsAgentToDroidRef.current.delete(opsAgentTabId)
+        }
+      }
+      
+      // Create new Droid Worker tab with general mode
+      const newWorkerId = `ops-worker-${opsAgentTabId}-${Date.now()}`
+      console.log(`[OpsAgent] Creating new Droid Worker: ${newWorkerId}`)
+      
+      const newTab = { id: newWorkerId, mode: 'general' as WorkerMode }
+      setChangeTabs(prev => [...prev, newTab])
+      setChangeResetKeys(prev => new Map(prev).set(newWorkerId, 0))
+      
+      // Store auto-send message if provided
+      if (autoSendMessage) {
+        setChangeAutoSendMessages(prev => new Map(prev).set(newWorkerId, autoSendMessage))
+      }
+      
+      // Establish binding
+      opsAgentToDroidRef.current.set(opsAgentTabId, newWorkerId)
+      console.log(`[OpsAgent] Bound Ops Agent ${opsAgentTabId} ↔ Droid Worker ${newWorkerId}`)
+      
+      // Switch to the new worker tab
+      setActiveChangeTabId(newWorkerId)
+      setActiveTab('change')
+    }
+
+    return () => {
+      window.__createOpsAgentTab = undefined
+      window.__switchToOpsAgent = undefined
+      window.__createOpsAgentWorker = undefined
+    }
+  }, [opsAgentTabs, changeTabs])
+
   const handleContinueChange = (changeId: string) => {
     const tabId = `change-${changeId}-${Date.now()}`
     setChangeTabs(prev => [...prev, { id: tabId, mode: 'continue_change', changeId }])
@@ -685,6 +778,13 @@ function App() {
     }
     // Clean up pending Auto Fix activations for this Droid tab
     pendingAutoFixActivationsRef.current.delete(tabId)
+    // Clean up Ops Agent binding if this worker was bound to an Ops Agent
+    opsAgentToDroidRef.current.forEach((workerId, opsAgentId) => {
+      if (workerId === tabId) {
+        opsAgentToDroidRef.current.delete(opsAgentId)
+        console.log(`[OpsAgent] Removed binding for Ops Agent ${opsAgentId} (worker ${tabId} closed)`)
+      }
+    })
     if (remaining.length === 0) {
       setActiveChangeTabId(null)
       setActiveTab('viewer')
@@ -1112,6 +1212,27 @@ function App() {
     bridge.openAutoFixWindow(changeId || '', tree.nativePath)
   }
 
+  const handleOpenOpsAgent = () => {
+    // Create or switch to Ops Agent tab
+    if (opsAgentTabs.length > 0) {
+      // Switch to existing tab
+      setActiveOpsAgentTabId(opsAgentTabs[0].id)
+      setActiveTab('ops-agent')
+    } else {
+      // Request native to create Ops Agent tab with project path
+      const bridge = window.__nativeBridge
+      if (bridge && tree?.nativePath) {
+        bridge.createOpsAgentTab(tree.nativePath)
+      } else {
+        // Fallback: create empty tab
+        const tabId = `ops-agent-${Date.now()}`
+        setOpsAgentTabs([{ id: tabId, htmlContent: '' }])
+        setActiveOpsAgentTabId(tabId)
+        setActiveTab('ops-agent')
+      }
+    }
+  }
+
   const handleOpen = async () => {
     try {
       setError(null)
@@ -1143,6 +1264,7 @@ function App() {
                   <button onClick={handleNewDroid}><PlusCircleIcon size={14} /> New Droid</button>
                   <button onClick={handleNewCodex}><PlusCircleIcon size={14} /> New Codex</button>
                   <button onClick={handleOpenAutoFix} className="btn-autofix"><RefreshIcon size={14} /> Self-Review Cycle</button>
+                  <button onClick={handleOpenOpsAgent}>🔍 Ops Agent</button>
                   <button onClick={triggerCelebration}>🎉 Celebrate</button>
                 </>
               )}
@@ -1191,6 +1313,15 @@ function App() {
                 <span className="tab-close" onClick={(e) => { e.stopPropagation(); handleCloseCodex(tab.id) }}>
                   <CloseIcon size={12} />
                 </span>
+              </button>
+            ))}
+            {opsAgentTabs.map(tab => (
+              <button
+                key={tab.id}
+                className={`tab-btn ${activeTab === 'ops-agent' && activeOpsAgentTabId === tab.id ? 'tab-btn-active' : ''}`}
+                onClick={() => { setActiveOpsAgentTabId(tab.id); setActiveTab('ops-agent') }}
+              >
+                Ops Agent
               </button>
             ))}
           </>
@@ -1335,6 +1466,17 @@ function App() {
                 <EmbeddedTerminal channel="codex" tabId={tab.id} />
               </div>
             </div>
+        ))}
+
+        {/* Ops Agent tabs */}
+        {window.__isNativeApp && opsAgentTabs.map(tab => (
+          <div key={tab.id} style={{ display: activeTab === 'ops-agent' && activeOpsAgentTabId === tab.id ? 'block' : 'none', width: '100%', height: '100%' }}>
+            <iframe
+              srcDoc={tab.htmlContent}
+              style={{ width: '100%', height: '100%', border: 'none' }}
+              title="Ops Agent Panel"
+            />
+          </div>
         ))}
 
       </div>

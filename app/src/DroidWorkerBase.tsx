@@ -15,7 +15,7 @@ function cappedHistory<T>(prev: T[], ...items: T[]): T[] {
 
 // ─── Types ─────────────────────────────────────────────────────────
 
-export type WorkerMode = 'new_change' | 'continue_change' | 'fix_review'
+export type WorkerMode = 'new_change' | 'continue_change' | 'fix_review' | 'general'
 
 export interface QuickButton {
   label: string
@@ -245,10 +245,21 @@ export function DroidWorkerBase({
 
         // Detect scenario from config triggers (use ref to avoid stale closure)
         if (config.confirmation?.enabled !== false && confirmationCardConfigRef.current) {
+          console.log(`[DroidWorkerBase:${tabId}] Checking for confirmation scenario...`)
+          console.log(`[DroidWorkerBase:${tabId}] Result text (first 200 chars):`, result.substring(0, 200))
+          console.log(`[DroidWorkerBase:${tabId}] Confirmation config:`, confirmationCardConfigRef.current)
           const scenarioKey = detectScenario(result, confirmationCardConfigRef.current)
+          console.log(`[DroidWorkerBase:${tabId}] Detected scenario:`, scenarioKey)
           if (scenarioKey !== 'default') {
+            console.log(`[DroidWorkerBase:${tabId}] Showing confirmation card for scenario:`, scenarioKey)
             setConfirmationData({ text: result, scenarioKey })
+          } else {
+            console.log(`[DroidWorkerBase:${tabId}] Scenario is 'default', not showing confirmation card`)
           }
+        } else {
+          console.log(`[DroidWorkerBase:${tabId}] Confirmation disabled or config not loaded`)
+          console.log(`[DroidWorkerBase:${tabId}] - confirmation.enabled:`, config.confirmation?.enabled)
+          console.log(`[DroidWorkerBase:${tabId}] - confirmationCardConfig:`, confirmationCardConfigRef.current)
         }
 
         if (onRefreshRef.current) onRefreshRef.current()
@@ -482,8 +493,16 @@ export function DroidWorkerBase({
     sendToDroid(prompt)
   }, [initialized, waiting, config.autoInitPrompt, changeId, projectPath, sendToDroid])
 
-  // Auto-send external message after initialized and not busy (for fix_review mode)
-  // Trigger Fix button with items text instead of sending raw message
+  // Reset autoSendMessageSentRef when autoSendMessage changes (for reusing workers)
+  useEffect(() => {
+    if (autoSendMessage) {
+      autoSendMessageSentRef.current = false
+    }
+  }, [autoSendMessage])
+
+  // Auto-send external message after initialized and not busy
+  // For fix_review mode: route through Fix button to wrap with promptTemplate
+  // For other modes (e.g., general/ops-agent): send raw message directly
   useEffect(() => {
     if (!initialized || waiting || autoSendMessageSentRef.current) return
     if (!autoSendMessage) return
@@ -492,25 +511,36 @@ export function DroidWorkerBase({
 
     autoSendMessageSentRef.current = true
     
-    // Find the "fix" role button from config (fallback to label for backward compatibility)
-    const fixButton = config.leftButtons.find(b => b.role === 'fix' && b.promptTemplate)
-      || config.leftButtons.find(b => b.label === 'Fix' && b.promptTemplate)
-    if (!fixButton || !handleQuickButtonRef.current) {
-      console.warn(`[DroidWorkerBase:${tabId}] autoSendMessage failed — no Fix button with promptTemplate found`)
-      if (onAutoSendFailedRef.current) onAutoSendFailedRef.current(tabId)
-      return
-    }
-    
-    // Trigger Fix button with autoSendMessage as items text
-    setTimeout(() => {
-      const sent = handleQuickButtonRef.current?.(fixButton, autoSendMessage)
-      if (sent && onAutoSendCompleteRef.current) {
-        onAutoSendCompleteRef.current(tabId)
-      } else if (!sent && onAutoSendFailedRef.current) {
-        onAutoSendFailedRef.current(tabId)
+    if (config.mode === 'fix_review') {
+      // Fix review mode: trigger Fix button with items text (wraps with promptTemplate)
+      const fixButton = config.leftButtons.find(b => b.role === 'fix' && b.promptTemplate)
+        || config.leftButtons.find(b => b.label === 'Fix' && b.promptTemplate)
+      if (!fixButton || !handleQuickButtonRef.current) {
+        console.warn(`[DroidWorkerBase:${tabId}] autoSendMessage failed — no Fix button with promptTemplate found`)
+        if (onAutoSendFailedRef.current) onAutoSendFailedRef.current(tabId)
+        return
       }
-    }, 50)
-  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, config.leftButtons, tabId])
+      
+      setTimeout(() => {
+        const sent = handleQuickButtonRef.current?.(fixButton, autoSendMessage)
+        if (sent && onAutoSendCompleteRef.current) {
+          onAutoSendCompleteRef.current(tabId)
+        } else if (!sent && onAutoSendFailedRef.current) {
+          onAutoSendFailedRef.current(tabId)
+        }
+      }, 50)
+    } else {
+      // Other modes (general, etc.): send message directly without Fix button wrapping
+      setHistory(prev => cappedHistory(prev, { role: 'user', text: autoSendMessage }))
+      taskIdRef.current = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      setWaiting(true)
+      if (projectPath) {
+        saveHistoryEntry(projectPath, `droid-worker://${changeId || 'idle'}`, autoSendMessage, `Droid Worker > Auto-send`).catch(() => {})
+      }
+      sendToDroid(autoSendMessage)
+      if (onAutoSendCompleteRef.current) onAutoSendCompleteRef.current(tabId)
+    }
+  }, [initialized, waiting, autoSendMessage, config.autoInitPrompt, config.leftButtons, config.mode, tabId, changeId, projectPath, sendToDroid])
 
   // ─── Confirmation handlers ───────────────────────────────────────
   // NOTE: useCallback must be declared before the early return to maintain
@@ -547,6 +577,13 @@ export function DroidWorkerBase({
       }
     }, 50)
   }, [config.leftButtons, tabId])
+
+  // Check if a message matches a confirmation trigger
+  const getScenarioKeyForMessage = useCallback((text: string): string | null => {
+    if (!confirmationCardConfigRef.current) return null
+    const key = detectScenario(text, confirmationCardConfigRef.current)
+    return key !== 'default' ? key : null
+  }, [])
 
   if (!bridge) return <div className="panel-empty">Native bridge not available</div>
 
@@ -673,17 +710,29 @@ export function DroidWorkerBase({
 
       {history.length > 0 && (
         <div className="wizard-history" ref={resultRef}>
-          {history.map((h, i) => (
-            <div key={i} className={`wizard-msg wizard-msg-${h.role}`}>
-              <span className="wizard-msg-role">{h.role === 'user' ? '▶' : '◀'}</span>
-              {h.role === 'assistant' && /- \[[ x]\]/i.test(h.text)
-                ? <MarkdownWithCheckbox text={h.text} className="wizard-msg-text" />
-                : h.role === 'assistant'
-                  ? <MarkdownRenderer text={h.text} className="wizard-msg-text" />
-                  : <pre className="wizard-msg-text">{h.text}</pre>
-              }
-            </div>
-          ))}
+          {history.map((h, i) => {
+            const scenarioKey = h.role === 'assistant' ? getScenarioKeyForMessage(h.text) : null
+            return (
+              <div key={i} className={`wizard-msg wizard-msg-${h.role}`}>
+                <span className="wizard-msg-role">{h.role === 'user' ? '▶' : '◀'}</span>
+                {h.role === 'assistant' && /- \[[ x]\]/i.test(h.text)
+                  ? <MarkdownWithCheckbox text={h.text} className="wizard-msg-text" />
+                  : h.role === 'assistant'
+                    ? <MarkdownRenderer text={h.text} className="wizard-msg-text" />
+                    : <pre className="wizard-msg-text">{h.text}</pre>
+                }
+                {scenarioKey && (
+                  <button
+                    className="btn-secondary btn-human-confirm"
+                    onClick={() => setConfirmationData({ text: h.text, scenarioKey })}
+                    style={{ marginLeft: '8px', fontSize: '11px', padding: '2px 8px', flexShrink: 0 }}
+                  >
+                    Human
+                  </button>
+                )}
+              </div>
+            )
+          })}
           {waiting && (
             <div className="wizard-msg wizard-msg-loading">
               <span className="wizard-spinner" />

@@ -36,6 +36,16 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     ],
     rightButtons: [],
   },
+  general: {
+    mode: 'general',
+    name: 'General Worker',
+    autoInitPrompt: null,
+    leftButtons: [
+      { label: 'Fix', role: 'fix', promptTemplate: '请逐个修复以下问题：\n{input}', requiresInput: true },
+    ],
+    rightButtons: [],
+    confirmation: { enabled: true },
+  },
 }
 
 interface YamlButtonConfig {
@@ -126,7 +136,7 @@ export async function loadWorkerConfigs(projectPath: string): Promise<Record<Wor
     }
 
     const configs: Record<WorkerMode, DroidWorkerConfig> = { ...DEFAULT_WORKER_CONFIGS }
-    const modeKeys: WorkerMode[] = ['new_change', 'continue_change', 'fix_review']
+    const modeKeys: WorkerMode[] = ['new_change', 'continue_change', 'fix_review', 'general']
 
     for (const key of modeKeys) {
       if (parsed.modes[key]) {

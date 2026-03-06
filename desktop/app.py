@@ -226,6 +226,13 @@ class TerminalSession:
         # Bypass proxy for localhost/127.0.0.1 to allow hook notifications
         env['no_proxy'] = '127.0.0.1,localhost'
         env['NO_PROXY'] = '127.0.0.1,localhost'
+        # Ensure ~/.local/bin is at the front of PATH to use latest droid version
+        local_bin = os.path.expanduser('~/.local/bin')
+        current_path = env.get('PATH', '')
+        # Remove ~/.local/bin from current PATH if it exists
+        path_parts = [p for p in current_path.split(':') if p != local_bin]
+        # Prepend ~/.local/bin to PATH
+        env['PATH'] = f"{local_bin}:{':'.join(path_parts)}"
 
         pid, fd = pty.fork()
         if pid == 0:
@@ -560,6 +567,47 @@ class NativeBridgeHandler(NSObject):
                     except Exception as e:
                         print(f"[AutoFix] Send failure dispatch error: {e}")
 
+            # Ops Agent messages
+            elif msg_type == 'createOpsAgentTab':
+                project_path = msg.get('projectPath', '')
+                self.coordinator.log('info', 'ops_agent_create', f'Creating Ops Agent tab for: {project_path}')
+                self.coordinator.send_ops_agent_html(project_path)
+            elif msg_type == 'opsAgentRefreshLogList':
+                self.coordinator.log('info', 'ops_agent_refresh', 'Refreshing log list')
+                data = msg.get('data', {})
+                threading.Thread(target=self._handle_ops_agent_refresh, args=(data,), daemon=True).start()
+            elif msg_type == 'opsAgentSelectLogFile':
+                data = msg.get('data', {})
+                log_path = data.get('logPath', '')
+                self.coordinator.log('info', 'ops_agent_select', f'path={log_path}')
+                threading.Thread(target=self._handle_ops_agent_select_log, args=(data,), daemon=True).start()
+            elif msg_type == 'opsAgentAnalyzeLogs':
+                data = msg.get('data', {})
+                self.coordinator.log('info', 'ops_agent_analyze', f'logs={len(data.get("logPaths", []))}')
+                threading.Thread(target=self._handle_ops_agent_analyze, args=(data,), daemon=True).start()
+            elif msg_type == 'opsAgentSaveState':
+                data = msg.get('data', {})
+                self.coordinator.log('info', 'ops_agent_save_state', 'Saving state')
+                self._handle_ops_agent_save_state(data)
+            elif msg_type == 'opsAgentLoadState':
+                self.coordinator.log('info', 'ops_agent_load_state', 'Loading state')
+                data = msg.get('data', {})
+                self._handle_ops_agent_load_state(data)
+            elif msg_type == 'opsAgentExportLog':
+                log_path = msg.get('data', {}).get('logPath', '')
+                self.coordinator.log('info', 'ops_agent_export', f'Exporting: {log_path}')
+                self._handle_ops_agent_export(log_path)
+            elif msg_type == 'opsAgentAddLogFile':
+                self.coordinator.log('info', 'ops_agent_add_file', 'Adding log file')
+                self._handle_ops_agent_add_file()
+            elif msg_type == 'opsAgentDeleteLogFile':
+                log_path = msg.get('data', {}).get('logPath', '')
+                self.coordinator.log('info', 'ops_agent_delete_file', f'Deleting: {log_path}')
+                self._handle_ops_agent_delete_file(log_path)
+            elif msg_type == 'opsAgentWorkerOutput':
+                self.coordinator.log('info', 'ops_agent_worker_output', 'Worker output received')
+                # TODO: Implement worker output handling
+
             # JS console forwarding
             elif msg_type == 'jsConsole':
                 level = msg.get('level', 'log')
@@ -855,6 +903,363 @@ class NativeBridgeHandler(NSObject):
             })
 
         threading.Thread(target=do_branch, daemon=True).start()
+
+    def _handle_ops_agent_refresh(self, data: dict):
+        """Handle log list refresh request."""
+        try:
+            project_path = data.get('projectPath', '')
+            ops_agent_tab_id = data.get('opsAgentTabId', '')
+            log_files = self.coordinator.scan_log_files(project_path)
+            if self.coordinator.webview:
+                files_json = json.dumps(log_files, ensure_ascii=False)
+                tab_id_json = json.dumps(ops_agent_tab_id)
+                js = f"""
+                var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+                opsIframes.forEach(function(opsIframe) {{
+                    if (opsIframe.contentWindow && opsIframe.contentWindow.__opsAgentTabId === {tab_id_json}) {{
+                        if (opsIframe.contentWindow.updateLogList) {{
+                            opsIframe.contentWindow.updateLogList({files_json});
+                        }}
+                    }}
+                }});
+                """
+                def do_eval():
+                    self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+        except Exception as e:
+            print(f"[OpsAgent] Refresh error: {e}")
+
+    def _handle_ops_agent_select_log(self, data: dict):
+        """Handle log file selection request."""
+        try:
+            log_path = data.get('logPath', '')
+            ops_agent_tab_id = data.get('opsAgentTabId', '')
+            lines = self.coordinator.read_log_tail(log_path)
+            if self.coordinator.webview:
+                lines_json = json.dumps(lines, ensure_ascii=False)
+                path_json = json.dumps(log_path)
+                tab_id_json = json.dumps(ops_agent_tab_id)
+                js = f"""
+                var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+                opsIframes.forEach(function(opsIframe) {{
+                    if (opsIframe.contentWindow && opsIframe.contentWindow.__opsAgentTabId === {tab_id_json}) {{
+                        if (opsIframe.contentWindow.showLogContent) {{
+                            opsIframe.contentWindow.showLogContent({path_json}, {lines_json});
+                        }}
+                    }}
+                }});
+                """
+                def do_eval():
+                    self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+        except Exception as e:
+            print(f"[OpsAgent] Select log error: {e}")
+
+    def _handle_ops_agent_analyze(self, data: dict):
+        """Handle log analysis request."""
+        try:
+            log_paths = data.get('logPaths', [])
+            time_range = data.get('timeRange', '1d')
+            context_prompt = data.get('contextPrompt', '')
+            project_path = data.get('projectPath', '')
+            
+            # Send progress update
+            ops_agent_tab_id = data.get('opsAgentTabId', '')
+            self._send_ops_agent_progress('正在合并日志文件...', ops_agent_tab_id)
+            
+            # Merge logs
+            merged_path = self.coordinator.merge_logs(log_paths, time_range, project_path)
+            
+            # Send progress update
+            self._send_ops_agent_progress('日志合并完成，创建 Droid Worker...', ops_agent_tab_id)
+            
+            # Send merged log path to frontend
+            ops_agent_tab_id = data.get('opsAgentTabId', '')
+            if self.coordinator.webview:
+                path_json = json.dumps(merged_path)
+                tab_id_json = json.dumps(ops_agent_tab_id)
+                merged_log_js = f"""
+                var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+                opsIframes.forEach(function(opsIframe) {{
+                    if (opsIframe.contentWindow && opsIframe.contentWindow.__opsAgentTabId === {tab_id_json}) {{
+                        if (opsIframe.contentWindow.setMergedLogPath) {{
+                            opsIframe.contentWindow.setMergedLogPath({path_json});
+                        }}
+                    }}
+                }});
+                """
+                def do_eval_merged(js_code=merged_log_js):
+                    self.coordinator.webview.evaluateJavaScript_completionHandler_(js_code, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval_merged)
+            
+            # Construct analysis prompt with file path reference (per design spec)
+            analysis_prompt = f"""{context_prompt}
+
+综合日志见文件：{merged_path}
+
+请先使用 cat 命令读取上述日志文件，然后分析这些日志，系统地给出错误清单，保留错误上下文。
+
+重要：输出格式要求：
+在最终输出的第一行必须写 [ops_agent_errors]，然后换行后输出错误清单。
+每个错误用 markdown checkbox 格式列出：
+- [ ] [错误摘要，包含服务名、错误类型、关键信息]
+每个 checkbox 项应该是一句话的错误描述，便于用户选择需要修复的项目。"""
+            
+            # Create Droid Worker tab with auto-send message
+            import random
+            timestamp_ms = int(time.time() * 1000)
+            random_suffix = ''.join(random.choices('0123456789abcdef', k=4))
+            
+            # Get Ops Agent tab ID from the request (injected by frontend)
+            ops_agent_tab_id = data.get('opsAgentTabId', f'ops-agent-{timestamp_ms}')
+            
+            # Create worker tab in main webview with autoSendMessage
+            if self.coordinator.webview:
+                payload = json.dumps({
+                    'opsAgentTabId': ops_agent_tab_id,
+                    'autoSendMessage': analysis_prompt,
+                }, ensure_ascii=False)
+                b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+                create_worker_js = f"""
+                if (window.__createOpsAgentWorker) {{
+                    try {{
+                        var b = atob('{b64}');
+                        var a = new Uint8Array(b.length);
+                        for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+                        var text = new TextDecoder('utf-8').decode(a);
+                        var data = JSON.parse(text);
+                        window.__createOpsAgentWorker(data);
+                        console.log('[OpsAgent] Created/reused worker for Ops Agent:', data.opsAgentTabId);
+                    }} catch(e) {{ 
+                        console.error('[OpsAgent] create worker error:', e); 
+                    }}
+                }}
+                """
+                def do_eval_worker(js_code=create_worker_js):
+                    self.coordinator.webview.evaluateJavaScript_completionHandler_(js_code, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval_worker)
+            
+            # Send completion message
+            message = f"已创建 Worker 并发送分析请求"
+            self._send_ops_agent_complete(True, message, ops_agent_tab_id)
+            
+        except Exception as e:
+            print(f"[OpsAgent] Analyze error: {e}")
+            import traceback
+            traceback.print_exc()
+            ops_agent_tab_id = data.get('opsAgentTabId', '')
+            self._send_ops_agent_complete(False, str(e), ops_agent_tab_id)
+
+    def _send_ops_agent_progress(self, message: str, ops_agent_tab_id: str = ''):
+        """Send progress update to frontend."""
+        if self.coordinator.webview:
+            msg_json = json.dumps(message)
+            tab_id_json = json.dumps(ops_agent_tab_id)
+            js = f"""
+            var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+            opsIframes.forEach(function(opsIframe) {{
+                if (opsIframe.contentWindow && (!{tab_id_json} || opsIframe.contentWindow.__opsAgentTabId === {tab_id_json})) {{
+                    if (opsIframe.contentWindow.onAnalyzeProgress) {{
+                        opsIframe.contentWindow.onAnalyzeProgress({msg_json});
+                    }}
+                }}
+            }});
+            """
+            def do_eval():
+                self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+    def _send_ops_agent_complete(self, success: bool, message: str, ops_agent_tab_id: str = ''):
+        """Send completion message to frontend."""
+        if self.coordinator.webview:
+            success_str = 'true' if success else 'false'
+            msg_json = json.dumps(message)
+            tab_id_json = json.dumps(ops_agent_tab_id)
+            js = f"""
+            var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+            opsIframes.forEach(function(opsIframe) {{
+                if (opsIframe.contentWindow && (!{tab_id_json} || opsIframe.contentWindow.__opsAgentTabId === {tab_id_json})) {{
+                    if (opsIframe.contentWindow.onAnalyzeComplete) {{
+                        opsIframe.contentWindow.onAnalyzeComplete({success_str}, {msg_json});
+                    }}
+                }}
+            }});
+            """
+            def do_eval():
+                self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+            NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+
+    def _handle_ops_agent_save_state(self, data: dict):
+        """Save Ops Agent state to project-specific config."""
+        try:
+            project_path = data.get('projectPath', '')
+            if not project_path:
+                print(f"[OpsAgent] No project path provided for save state")
+                return
+            
+            # Save to project's ops-agent directory
+            ops_dir = os.path.join(project_path, 'ops-agent')
+            os.makedirs(ops_dir, exist_ok=True)
+            
+            state_file = os.path.join(ops_dir, '.ops_agent_state.json')
+            
+            # Remove projectPath from data before saving
+            state_data = {k: v for k, v in data.items() if k != 'projectPath'}
+            
+            with open(state_file, 'w') as f:
+                json.dump(state_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[OpsAgent] Save state error: {e}")
+
+    def _handle_ops_agent_load_state(self, data: dict):
+        """Load Ops Agent state from project-specific config and send to frontend."""
+        try:
+            project_path = data.get('projectPath', '')
+            if not project_path:
+                print(f"[OpsAgent] No project path provided for load state")
+                return
+            
+            # Load from project's ops-agent directory
+            state_file = os.path.join(project_path, 'ops-agent', '.ops_agent_state.json')
+            
+            state = {}
+            if os.path.exists(state_file):
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+            
+            if self.coordinator.webview:
+                state_json = json.dumps(state, ensure_ascii=False)
+                ops_agent_tab_id = data.get('opsAgentTabId', '')
+                tab_id_json = json.dumps(ops_agent_tab_id)
+                js = f"""
+                var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+                opsIframes.forEach(function(opsIframe) {{
+                    if (opsIframe.contentWindow && opsIframe.contentWindow.__opsAgentTabId === {tab_id_json}) {{
+                        if (opsIframe.contentWindow.restoreState) {{
+                            opsIframe.contentWindow.restoreState({state_json});
+                        }}
+                    }}
+                }});
+                """
+                def do_eval():
+                    self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+        except Exception as e:
+            print(f"[OpsAgent] Load state error: {e}")
+
+    def _handle_ops_agent_export(self, log_path: str):
+        """Export merged log file."""
+        try:
+            if os.path.exists(log_path):
+                # Open file in Finder
+                subprocess.run(['open', '-R', log_path])
+        except Exception as e:
+            print(f"[OpsAgent] Export error: {e}")
+
+    def _handle_ops_agent_add_file(self):
+        """Open file picker to add log file."""
+        from Cocoa import NSOpenPanel, NSModalResponseOK
+        
+        def do_pick():
+            panel = NSOpenPanel.alloc().init()
+            panel.setCanChooseFiles_(True)
+            panel.setCanChooseDirectories_(False)
+            panel.setAllowsMultipleSelection_(True)
+            panel.setMessage_("选择日志文件")
+            panel.setPrompt_("添加")
+            
+            # Allow common log file types
+            panel.setAllowedFileTypes_(['log', 'txt', 'out', 'err'])
+            
+            response = panel.runModal()
+            if response == NSModalResponseOK:
+                urls = panel.URLs()
+                file_paths = [url.path() for url in urls]
+                
+                # Add files to config
+                try:
+                    import yaml
+                    config_path = os.path.expanduser('~/.logops/config.yaml')
+                    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                    
+                    # Load existing config
+                    if os.path.exists(config_path):
+                        with open(config_path, 'r') as f:
+                            config = yaml.safe_load(f) or {}
+                    else:
+                        config = {'log_sources': []}
+                    
+                    # Ensure log_sources exists
+                    if 'log_sources' not in config:
+                        config['log_sources'] = []
+                    
+                    # Add new files
+                    for path in file_paths:
+                        # Check if already exists
+                        if not any(src.get('path') == path for src in config['log_sources']):
+                            config['log_sources'].append({
+                                'name': str(os.path.basename(path)),
+                                'path': str(path),
+                                'type': 'text'
+                            })
+                    
+                    # Save config
+                    with open(config_path, 'w') as f:
+                        yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True)
+                    
+                    # Trigger refresh by calling JavaScript to refresh itself
+                    if self.coordinator and self.coordinator.webview:
+                        js = """
+                        var opsIframe = document.querySelector('iframe[title="Ops Agent Panel"]');
+                        if (opsIframe && opsIframe.contentWindow && opsIframe.contentWindow.refreshLogList) {
+                            opsIframe.contentWindow.refreshLogList();
+                        }
+                        """
+                        def do_eval():
+                            self.coordinator.webview.evaluateJavaScript_completionHandler_(js, None)
+                        NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+                    
+                    print(f"[OpsAgent] Added {len(file_paths)} log file(s)")
+                except Exception as e:
+                    print(f"[OpsAgent] Add file error: {e}")
+        
+        # Run on main thread
+        NSOperationQueue.mainQueue().addOperationWithBlock_(do_pick)
+
+    def _handle_ops_agent_delete_file(self, log_path: str):
+        """Delete log file from config."""
+        try:
+            import yaml
+            config_path = os.path.expanduser('~/.logops/config.yaml')
+            
+            if not os.path.exists(config_path):
+                print(f"[OpsAgent] Config file not found")
+                return
+            
+            # Load existing config
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f) or {}
+            
+            # Ensure log_sources exists
+            if 'log_sources' not in config:
+                config['log_sources'] = []
+            
+            # Remove the log file
+            original_count = len(config['log_sources'])
+            config['log_sources'] = [
+                src for src in config['log_sources'] 
+                if src.get('path') != log_path
+            ]
+            
+            # Save config
+            with open(config_path, 'w') as f:
+                yaml.safe_dump(config, f, default_flow_style=False, allow_unicode=True)
+            
+            removed_count = original_count - len(config['log_sources'])
+            print(f"[OpsAgent] Deleted {removed_count} log file(s)")
+            
+        except Exception as e:
+            print(f"[OpsAgent] Delete file error: {e}")
 
     def _send_response(self, request_id, data):
         """Send response back to WebView."""
@@ -1649,6 +2054,267 @@ class AppCoordinator:
                 afw.on_hook_event(data)
             except Exception as e:
                 print(f"[AutoFix] Hook dispatch error: {e}")
+
+    # ─── Ops Agent Methods ─────────────────────────────────────────
+
+    def scan_log_files(self, project_path: str) -> list:
+        """Scan for log files in the project directory."""
+        import glob
+        import yaml
+        from pathlib import Path
+        
+        log_files = []
+        
+        # Try to load from ~/.logops/config.yaml first
+        config_path = Path.home() / '.logops' / 'config.yaml'
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    log_sources = config.get('log_sources', [])
+                    for source in log_sources:
+                        path = os.path.expanduser(source.get('path', ''))
+                        if os.path.exists(path) and os.path.isfile(path):
+                            stat = os.stat(path)
+                            log_files.append({
+                                'name': source.get('name', os.path.basename(path)),
+                                'path': path,
+                                'size': self._format_file_size(stat.st_size),
+                                'modified': time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_mtime))
+                            })
+            except Exception as e:
+                print(f"[OpsAgent] Failed to load config: {e}")
+        
+        # Fallback: auto-scan project directory
+        if not log_files and project_path:
+            patterns = [
+                os.path.join(project_path, 'logs', '*.log'),
+                os.path.join(project_path, '*.log'),
+                os.path.join(project_path, '**', '*.log'),
+            ]
+            for pattern in patterns:
+                for path in glob.glob(pattern, recursive=True):
+                    if os.path.isfile(path):
+                        stat = os.stat(path)
+                        log_files.append({
+                            'name': os.path.basename(path),
+                            'path': path,
+                            'size': self._format_file_size(stat.st_size),
+                            'modified': time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_mtime))
+                        })
+        
+        return log_files
+
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format."""
+        if size_bytes < 1024:
+            return f"{size_bytes}B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f}KB"
+        else:
+            return f"{size_bytes / (1024 * 1024):.1f}MB"
+
+    def read_log_tail(self, log_path: str, max_lines: int = 100) -> list:
+        """Read the last N lines of a log file."""
+        try:
+            # Check file size
+            stat = os.stat(log_path)
+            if stat.st_size > 100 * 1024 * 1024:  # 100MB
+                max_lines = 10000
+            
+            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                return lines[-max_lines:]
+        except Exception as e:
+            print(f"[OpsAgent] Failed to read log file {log_path}: {e}")
+            return []
+
+    def merge_logs(self, log_paths: list, time_range: str, project_path: str) -> str:
+        """Merge selected log files with ISO 8601 timestamp parsing and time-based sorting."""
+        import datetime
+        
+        # Calculate time range
+        now = datetime.datetime.now()
+        if time_range == '1h':
+            since = now - datetime.timedelta(hours=1)
+        elif time_range == '1d':
+            since = now - datetime.timedelta(days=1)
+        elif time_range == '7d':
+            since = now - datetime.timedelta(days=7)
+        else:
+            since = now - datetime.timedelta(days=1)  # Default to 1 day
+        
+        # Create ops-agent directory
+        ops_dir = os.path.join(project_path, 'ops-agent')
+        os.makedirs(ops_dir, exist_ok=True)
+        
+        # Generate merged log filename
+        timestamp = now.strftime('%Y-%m-%d-%H%M')
+        merged_path = os.path.join(ops_dir, f'{timestamp}-merged.log')
+        
+        # ISO 8601 timestamp pattern (supports multiple formats):
+        # - 2026-03-06T14:23:45.123Z (standard ISO 8601 with T separator)
+        # - 2026-03-06T14:23:45.123+08:00 (with timezone offset)
+        # - 2026-03-05 16:10:10,919 (Python logging format with space and comma)
+        iso_pattern = re.compile(
+            r'^(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:[.,]\d{3,6})?(?:Z|[+-]\d{2}:\d{2})?)'
+        )
+        
+        # Collect all log entries with timestamps
+        log_entries = []
+        last_valid_ts = {}  # Track last valid timestamp per file for continuation lines
+        
+        for log_path in log_paths:
+            log_name = os.path.basename(log_path)
+            last_valid_ts[log_name] = None
+            try:
+                file_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(log_path))
+                # Skip files modified before time range
+                if file_mtime < since:
+                    self.log('info', 'merge_logs', f'Skipped {log_name}: modified {file_mtime.strftime("%Y-%m-%d %H:%M")}')
+                    continue
+                
+                with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        # Parse ISO 8601 timestamp from line
+                        match = iso_pattern.match(line)
+                        if match:
+                            try:
+                                ts_str = match.group(1)
+                                # Normalize timestamp format for Python's fromisoformat:
+                                # - Replace Z with +00:00
+                                # - Replace space with T
+                                # - Replace comma with dot for milliseconds
+                                ts_str_normalized = (ts_str
+                                    .replace('Z', '+00:00')
+                                    .replace(' ', 'T')
+                                    .replace(',', '.'))
+                                
+                                line_ts = datetime.datetime.fromisoformat(ts_str_normalized)
+                                
+                                # Convert timezone-naive to UTC for consistent comparison
+                                if line_ts.tzinfo is None:
+                                    line_ts = line_ts.replace(tzinfo=datetime.timezone.utc)
+                                
+                                # Filter by time range (ensure since is also timezone-aware)
+                                since_aware = since.replace(tzinfo=datetime.timezone.utc) if since.tzinfo is None else since
+                                if line_ts < since_aware:
+                                    continue
+                                
+                                # Store (timestamp, source_file, line)
+                                log_entries.append((line_ts, log_name, line))
+                                last_valid_ts[log_name] = line_ts
+                            except ValueError as e:
+                                # If parsing fails, use last valid timestamp or datetime.max (sorted last)
+                                fallback_ts = last_valid_ts[log_name] if last_valid_ts[log_name] else datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+                                log_entries.append((fallback_ts, log_name, line))
+                        else:
+                            # Lines without timestamp use last valid timestamp or datetime.max (sorted last)
+                            fallback_ts = last_valid_ts[log_name] if last_valid_ts[log_name] else datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+                            log_entries.append((fallback_ts, log_name, line))
+            except Exception as e:
+                self.log('error', 'merge_logs', f'Failed to read {log_name}: {e}')
+        
+        # Sort by timestamp
+        log_entries.sort(key=lambda x: x[0])
+        
+        # Write merged log with source file markers
+        with open(merged_path, 'w', encoding='utf-8') as out:
+            out.write(f"{'='*80}\n")
+            out.write(f"Merged Log - Generated at {timestamp}\n")
+            out.write(f"Time Range: {time_range} (since {since.strftime('%Y-%m-%d %H:%M:%S')})\n")
+            out.write(f"Source Files: {len(log_paths)}\n")
+            out.write(f"Total Entries: {len(log_entries)}\n")
+            out.write(f"{'='*80}\n\n")
+            
+            current_source = None
+            for ts, source, line in log_entries:
+                # Add source file marker when switching files
+                if source != current_source:
+                    out.write(f"\n--- {source} ---\n")
+                    current_source = source
+                out.write(line)
+        
+        self.log('info', 'merge_logs', f'Merged {len(log_entries)} entries to {merged_path}')
+        return merged_path
+
+    def send_ops_agent_html(self, project_path: str = ''):
+        """Load ops_agent_panel.html and send to frontend."""
+        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ops_agent_panel.html')
+        try:
+            with open(html_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # Inject project path into HTML
+            inject_script = f"""
+            <script>
+            window.__opsAgentProjectPath = {json.dumps(project_path)};
+            </script>
+            """
+            html_content = html_content.replace('</head>', f'{inject_script}</head>')
+            
+            if self.webview:
+                # Escape for JSON
+                html_escaped = json.dumps(html_content)
+                js = f"""
+                if (window.__createOpsAgentTab) {{
+                    window.__createOpsAgentTab({html_escaped});
+                }}
+                """
+                def do_eval():
+                    self.webview.evaluateJavaScript_completionHandler_(js, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval)
+                self.log('info', 'ops_agent', 'Ops Agent tab created')
+                
+                # Auto-refresh log list after tab creation
+                threading.Thread(target=self._handle_ops_agent_refresh_delayed, args=(project_path,), daemon=True).start()
+        except Exception as e:
+            print(f"[OpsAgent] Failed to load HTML: {e}")
+            self.log('error', 'ops_agent', f'Failed to load HTML: {e}')
+    
+    def _handle_ops_agent_refresh_delayed(self, project_path: str):
+        """Delayed refresh to allow tab to be fully loaded."""
+        time.sleep(0.5)  # Wait for tab to be ready
+        # Call the refresh logic directly
+        try:
+            log_files = self.scan_log_files(project_path)
+            if self.webview:
+                files_json = json.dumps(log_files, ensure_ascii=False)
+                update_js = f"""
+                var opsIframe = document.querySelector('iframe[title="Ops Agent Panel"]');
+                if (opsIframe && opsIframe.contentWindow && opsIframe.contentWindow.updateLogList) {{
+                    opsIframe.contentWindow.updateLogList({files_json});
+                }}
+                """
+                def do_eval_update(js_code=update_js):
+                    self.webview.evaluateJavaScript_completionHandler_(js_code, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval_update)
+            
+            # Load saved state from project directory after refreshing log list
+            time.sleep(0.2)  # Wait a bit more for UI to be ready
+            
+            state_file = os.path.join(project_path, 'ops-agent', '.ops_agent_state.json')
+            state = {}
+            if os.path.exists(state_file):
+                with open(state_file, 'r') as f:
+                    state = json.load(f)
+            
+            if self.webview and state:
+                state_json = json.dumps(state, ensure_ascii=False)
+                # Note: This is delayed refresh, we don't have specific tabId, so broadcast to all
+                restore_js = f"""
+                var opsIframes = document.querySelectorAll('iframe[title="Ops Agent Panel"]');
+                opsIframes.forEach(function(opsIframe) {{
+                    if (opsIframe.contentWindow && opsIframe.contentWindow.restoreState) {{
+                        opsIframe.contentWindow.restoreState({state_json});
+                    }}
+                }});
+                """
+                def do_eval_restore(js_code=restore_js):
+                    self.webview.evaluateJavaScript_completionHandler_(js_code, None)
+                NSOperationQueue.mainQueue().addOperationWithBlock_(do_eval_restore)
+        except Exception as e:
+            print(f"[OpsAgent] Delayed refresh error: {e}")
 
 
 # ─── WKUIDelegate for JS alert/confirm/prompt ─────────────────────
@@ -2818,6 +3484,13 @@ class AppDelegate(NSObject):
             openAutoFixWindow: function(changeId, projectPath) {
                 window.webkit.messageHandlers.nativeBridge.postMessage(
                     JSON.stringify({type: 'openAutoFixWindow', changeId: changeId, projectPath: projectPath})
+                );
+            },
+            
+            // Ops Agent tab creation
+            createOpsAgentTab: function(projectPath) {
+                window.webkit.messageHandlers.nativeBridge.postMessage(
+                    JSON.stringify({type: 'createOpsAgentTab', projectPath: projectPath || ''})
                 );
             }
         };

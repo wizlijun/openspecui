@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #f5f5f5;
+  color: #333;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.header {
+  background: #fff;
+  padding: 6px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 40px;
+}
+.header h1 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #333;
+}
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+.btn {
+  background: #fff;
+  color: #333;
+  border: 1px solid #d0d0d0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn:hover {
+  background: #f0f0f0;
+}
+.btn-primary {
+  background: #1a73e8;
+  border: none;
+  color: #fff;
+}
+.btn-primary:hover {
+  background: #1565c0;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Main container */
+.container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Left panel */
+.left-panel {
+  width: 350px;
+  background: #fff;
+  border-right: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Log files section */
+.section {
+  padding: 12px;
+  border-bottom: 1px solid #e0e0e0;
+}
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.btn-add {
+  background: #fff;
+  color: #1a73e8;
+  border: 1px solid #d0d0d0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-add:hover {
+  background: #f0f0f0;
+  border-color: #1a73e8;
+}
+.log-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+.log-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+  position: relative;
+}
+.log-item:hover {
+  background: #f0f0f0;
+}
+.log-item:hover .log-delete-btn {
+  display: block;
+}
+.log-item.selected {
+  background: #e8f0fe;
+}
+.log-checkbox {
+  margin-right: 8px;
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  accent-color: #1a73e8;
+}
+.log-name {
+  flex: 1;
+  font-size: 13px;
+  color: #333;
+}
+.log-meta {
+  font-size: 11px;
+  color: #999;
+  margin-left: 8px;
+}
+.log-delete-btn {
+  display: none;
+  background: #d93025;
+  color: white;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: background 0.15s;
+}
+.log-delete-btn:hover {
+  background: #b71c1c;
+}
+
+/* Time range section */
+.time-range-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.time-option {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.time-option input[type="radio"] {
+  margin-right: 8px;
+  cursor: pointer;
+  accent-color: #1a73e8;
+}
+.time-option label {
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+}
+
+/* Context prompt section */
+.context-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.context-textarea {
+  flex: 1;
+  background: #f9f9f9;
+  color: #333;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+}
+.context-textarea:focus {
+  border-color: #1a73e8;
+  background: #fff;
+}
+.context-textarea::placeholder {
+  color: #aaa;
+}
+
+/* Right panel */
+.right-panel {
+  flex: 1;
+  background: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.log-viewer-header {
+  background: #fafafa;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e0e0e0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.log-viewer-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+}
+.log-viewer-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #fff;
+}
+.log-line {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0;
+}
+.log-line-number {
+  color: #999;
+  text-align: right;
+  min-width: 40px;
+  user-select: none;
+}
+.log-line-content {
+  flex: 1;
+  color: #333;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-line-content.error {
+  color: #d93025;
+}
+.log-line-content.warn {
+  color: #e65100;
+}
+.log-line-content.info {
+  color: #1a73e8;
+}
+
+/* Status bar */
+.status-bar {
+  background: #fafafa;
+  padding: 6px 12px;
+  border-top: 1px solid #e0e0e0;
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.status-text {
+  flex: 1;
+}
+.status-progress {
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+.status-progress.visible {
+  display: flex;
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #d0d0d0;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f5f5f5;
+}
+::-webkit-scrollbar-thumb {
+  background: #d0d0d0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b0b0b0;
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #999;
+  font-size: 13px;
+}
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Ops Agent - 日志监控</h1>
+  <div class="header-actions">
+    <button class="btn" id="refreshBtn">刷新日志列表</button>
+    <button class="btn" id="exportBtn" disabled>导出合并日志</button>
+    <button class="btn btn-primary" id="analyzeBtn" disabled>分析日志</button>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Left Panel -->
+  <div class="left-panel">
+    <!-- Log Files -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title">日志文件</div>
+        <button class="btn-add" id="addLogBtn">+ 添加</button>
+      </div>
+      <div class="log-list" id="logList">
+        <div class="empty-state">
+          <div class="empty-state-icon">📋</div>
+          <div>暂无日志文件</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Time Range -->
+    <div class="section">
+      <div class="section-title">时间范围</div>
+      <div class="time-range-options">
+        <div class="time-option">
+          <input type="radio" name="timeRange" value="1h" id="time1h">
+          <label for="time1h">最近 1 小时</label>
+        </div>
+        <div class="time-option">
+          <input type="radio" name="timeRange" value="1d" id="time1d" checked>
+          <label for="time1d">最近 1 天</label>
+        </div>
+        <div class="time-option">
+          <input type="radio" name="timeRange" value="7d" id="time7d">
+          <label for="time7d">最近 7 天</label>
+        </div>
+        <div class="time-option">
+          <input type="radio" name="timeRange" value="custom" id="timeCustom">
+          <label for="timeCustom">自定义范围</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Context Prompt -->
+    <div class="section context-section">
+      <div class="section-title">上下文 Prompt</div>
+      <textarea class="context-textarea" id="contextPrompt" placeholder="描述每个日志的来源和分析需求...
+
+示例：
+api-server.log 是 API 服务的日志，记录 HTTP 请求和错误
+web-app.log 是前端应用的日志，记录 JavaScript 错误
+请对齐时间线，分析错误日志，系统地给出错误清单，保留错误上下文"></textarea>
+    </div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="right-panel">
+    <div class="log-viewer-header">
+      <div class="log-viewer-title" id="viewerTitle">选择日志文件查看详情</div>
+    </div>
+    <div class="log-viewer-content" id="logViewer">
+      <div class="empty-state">
+        <div class="empty-state-icon">📄</div>
+        <div>点击左侧日志文件查看内容</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="status-bar">
+  <div class="status-text" id="statusText">就绪</div>
+  <div class="status-progress" id="statusProgress">
+    <div class="spinner"></div>
+    <span id="progressText"></span>
+  </div>
+</div>
+
+<script>
+// State
+let logFiles = [];
+let selectedLogs = [];
+let currentViewingLog = null;
+let debounceTimer = null;
+let lastMergedLogPath = null;
+let projectPath = window.__opsAgentProjectPath || '';
+let opsAgentTabId = window.__opsAgentTabId || '';
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+  loadState();
+  refreshLogList();
+  setupEventListeners();
+  
+  // Listen for messages from parent window
+  window.addEventListener('message', function(event) {
+    if (!event.data || !event.data.type) return;
+    
+    switch (event.data.type) {
+      case 'updateLogList':
+        window.updateLogList(event.data.files);
+        break;
+      case 'showLogContent':
+        window.showLogContent(event.data.path, event.data.lines);
+        break;
+      case 'onAnalyzeProgress':
+        window.onAnalyzeProgress(event.data.message);
+        break;
+      case 'onAnalyzeComplete':
+        window.onAnalyzeComplete(event.data.success, event.data.message);
+        break;
+      case 'setMergedLogPath':
+        window.setMergedLogPath(event.data.path);
+        break;
+      case 'restoreState':
+        window.restoreState(event.data.state);
+        break;
+    }
+  });
+});
+
+function setupEventListeners() {
+  // Refresh button
+  document.getElementById('refreshBtn').addEventListener('click', refreshLogList);
+  
+  // Analyze button
+  document.getElementById('analyzeBtn').addEventListener('click', analyzeLogs);
+  
+  // Export button
+  document.getElementById('exportBtn').addEventListener('click', exportMergedLog);
+  
+  // Add log button
+  document.getElementById('addLogBtn').addEventListener('click', addLogFile);
+  
+  // Context prompt auto-save
+  document.getElementById('contextPrompt').addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(saveState, 500);
+  });
+  
+  // Time range auto-save
+  document.querySelectorAll('input[name="timeRange"]').forEach(function(radio) {
+    radio.addEventListener('change', saveState);
+  });
+  
+  // Search functionality (Ctrl+F)
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      searchInLogViewer();
+    }
+  });
+}
+
+function refreshLogList() {
+  setStatus('正在扫描日志文件...', true);
+  sendMessage('opsAgentRefreshLogList', { projectPath: projectPath });
+}
+
+function addLogFile() {
+  sendMessage('opsAgentAddLogFile', {});
+}
+
+function analyzeLogs() {
+  const selected = selectedLogs.filter(function(path) {
+    return logFiles.some(function(f) { return f.path === path; });
+  });
+  
+  if (selected.length === 0) {
+    alert('请至少选择一个日志文件');
+    return;
+  }
+  
+  const timeRange = document.querySelector('input[name="timeRange"]:checked').value;
+  const contextPrompt = document.getElementById('contextPrompt').value.trim();
+  
+  if (!contextPrompt) {
+    alert('请输入上下文 Prompt');
+    return;
+  }
+  
+  setStatus('正在分析日志...', true);
+  document.getElementById('analyzeBtn').disabled = true;
+  
+  sendMessage('opsAgentAnalyzeLogs', {
+    logPaths: selected,
+    timeRange: timeRange,
+    contextPrompt: contextPrompt,
+    projectPath: projectPath,
+    opsAgentTabId: opsAgentTabId
+  });
+}
+
+function selectLogFile(path) {
+  currentViewingLog = path;
+  setStatus('正在读取日志文件...', true);
+  sendMessage('opsAgentSelectLogFile', { logPath: path });
+}
+
+function toggleLogSelection(path, checked) {
+  if (checked) {
+    if (selectedLogs.indexOf(path) === -1) {
+      selectedLogs.push(path);
+    }
+  } else {
+    selectedLogs = selectedLogs.filter(function(p) { return p !== path; });
+  }
+  updateAnalyzeButton();
+  saveState();
+}
+
+function deleteLogFile(path, event) {
+  event.stopPropagation();
+  
+  var fileName = path.split('/').pop();
+  if (!confirm('确定要从列表中删除 "' + fileName + '" 吗？')) {
+    return;
+  }
+  
+  sendMessage('opsAgentDeleteLogFile', { logPath: path });
+  
+  // Remove from local state
+  logFiles = logFiles.filter(function(f) { return f.path !== path; });
+  selectedLogs = selectedLogs.filter(function(p) { return p !== path; });
+  
+  // Refresh UI
+  window.updateLogList(logFiles);
+  
+  if (currentViewingLog === path) {
+    currentViewingLog = null;
+    document.getElementById('logViewer').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📄</div><div>点击左侧日志文件查看内容</div></div>';
+    document.getElementById('viewerTitle').textContent = '选择日志文件查看详情';
+  }
+}
+
+function updateAnalyzeButton() {
+  document.getElementById('analyzeBtn').disabled = selectedLogs.length === 0;
+}
+
+function setStatus(text, showProgress) {
+  document.getElementById('statusText').textContent = text;
+  const progress = document.getElementById('statusProgress');
+  if (showProgress) {
+    progress.classList.add('visible');
+  } else {
+    progress.classList.remove('visible');
+  }
+}
+
+function sendMessage(type, data) {
+  if (window.webkit && window.webkit.messageHandlers.nativeBridge) {
+    window.webkit.messageHandlers.nativeBridge.postMessage(
+      JSON.stringify({ type: type, data: { ...data, opsAgentTabId: opsAgentTabId } })
+    );
+  }
+}
+
+function saveState() {
+  const timeRange = document.querySelector('input[name="timeRange"]:checked').value;
+  const contextPrompt = document.getElementById('contextPrompt').value;
+  
+  sendMessage('opsAgentSaveState', {
+    selectedLogs: selectedLogs,
+    timeRange: timeRange,
+    contextPrompt: contextPrompt,
+    lastMergedLogPath: lastMergedLogPath,
+    projectPath: projectPath
+  });
+}
+
+function loadState() {
+  // Request saved state from Python
+  sendMessage('opsAgentLoadState', {
+    projectPath: projectPath
+  });
+}
+
+// API called from Python
+window.updateLogList = function(files) {
+  logFiles = files;
+  const listEl = document.getElementById('logList');
+  
+  if (files.length === 0) {
+    listEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📋</div><div>暂无日志文件</div></div>';
+    setStatus('未找到日志文件', false);
+    return;
+  }
+  
+  listEl.innerHTML = '';
+  files.forEach(function(file) {
+    const item = document.createElement('div');
+    item.className = 'log-item';
+    
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'log-checkbox';
+    checkbox.checked = selectedLogs.indexOf(file.path) !== -1;
+    checkbox.addEventListener('change', function(e) {
+      e.stopPropagation();
+      toggleLogSelection(file.path, checkbox.checked);
+    });
+    
+    const name = document.createElement('span');
+    name.className = 'log-name';
+    name.textContent = file.name;
+    
+    const meta = document.createElement('span');
+    meta.className = 'log-meta';
+    meta.textContent = file.size + ' | ' + file.modified;
+    
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'log-delete-btn';
+    deleteBtn.textContent = '删除';
+    deleteBtn.addEventListener('click', function(e) {
+      deleteLogFile(file.path, e);
+    });
+    
+    item.appendChild(checkbox);
+    item.appendChild(name);
+    item.appendChild(meta);
+    item.appendChild(deleteBtn);
+    
+    item.addEventListener('click', function() {
+      document.querySelectorAll('.log-item').forEach(function(el) {
+        el.classList.remove('selected');
+      });
+      item.classList.add('selected');
+      selectLogFile(file.path);
+    });
+    
+    listEl.appendChild(item);
+  });
+  
+  updateAnalyzeButton();
+  setStatus('找到 ' + files.length + ' 个日志文件', false);
+};
+
+window.showLogContent = function(path, lines) {
+  const viewer = document.getElementById('logViewer');
+  const title = document.getElementById('viewerTitle');
+  
+  const fileName = path.split('/').pop();
+  title.textContent = fileName + ' (最近 ' + lines.length + ' 行)';
+  
+  if (lines.length === 0) {
+    viewer.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📄</div><div>日志文件为空</div></div>';
+    setStatus('日志文件为空', false);
+    return;
+  }
+  
+  viewer.innerHTML = '';
+  lines.forEach(function(line, index) {
+    const lineEl = document.createElement('div');
+    lineEl.className = 'log-line';
+    
+    const lineNum = document.createElement('span');
+    lineNum.className = 'log-line-number';
+    lineNum.textContent = index + 1;
+    
+    const content = document.createElement('span');
+    content.className = 'log-line-content';
+    
+    // Syntax highlighting
+    if (/ERROR|Exception|Traceback|FATAL/i.test(line)) {
+      content.classList.add('error');
+    } else if (/WARN|WARNING/i.test(line)) {
+      content.classList.add('warn');
+    } else if (/INFO|DEBUG/i.test(line)) {
+      content.classList.add('info');
+    }
+    
+    content.textContent = line;
+    
+    lineEl.appendChild(lineNum);
+    lineEl.appendChild(content);
+    viewer.appendChild(lineEl);
+  });
+  
+  setStatus('已加载 ' + lines.length + ' 行日志', false);
+};
+
+window.restoreState = function(state) {
+  if (state.selectedLogs) {
+    selectedLogs = state.selectedLogs;
+  }
+  if (state.timeRange) {
+    const radio = document.getElementById('time' + state.timeRange);
+    if (radio) radio.checked = true;
+  }
+  if (state.contextPrompt) {
+    document.getElementById('contextPrompt').value = state.contextPrompt;
+  }
+  if (state.lastMergedLogPath) {
+    lastMergedLogPath = state.lastMergedLogPath;
+    document.getElementById('exportBtn').disabled = false;
+  }
+  updateAnalyzeButton();
+};
+
+window.onAnalyzeComplete = function(success, message) {
+  document.getElementById('analyzeBtn').disabled = false;
+  if (success) {
+    setStatus('分析完成: ' + message, false);
+    // Extract merged log path from message if available
+    if (message.includes('.log')) {
+      document.getElementById('exportBtn').disabled = false;
+    }
+  } else {
+    setStatus('分析失败: ' + message, false);
+    alert('分析失败: ' + message);
+  }
+};
+
+window.onAnalyzeProgress = function(message) {
+  setStatus(message, true);
+};
+
+window.setMergedLogPath = function(path) {
+  lastMergedLogPath = path;
+  document.getElementById('exportBtn').disabled = false;
+};
+
+function exportMergedLog() {
+  if (!lastMergedLogPath) {
+    alert('没有可导出的合并日志');
+    return;
+  }
+  sendMessage('opsAgentExportLog', { logPath: lastMergedLogPath });
+}
+
+function searchInLogViewer() {
+  var searchTerm = prompt('搜索日志内容:');
+  if (!searchTerm) return;
+  
+  var viewer = document.getElementById('logViewer');
+  var lines = viewer.querySelectorAll('.log-line');
+  var found = false;
+  
+  lines.forEach(function(line) {
+    var content = line.querySelector('.log-line-content');
+    if (content && content.textContent.toLowerCase().includes(searchTerm.toLowerCase())) {
+      line.style.backgroundColor = '#fff3cd';
+      if (!found) {
+        line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        found = true;
+      }
+    } else {
+      line.style.backgroundColor = '';
+    }
+  });
+  
+  if (!found) {
+    alert('未找到匹配的内容');
+  }
+}
+</script>
+</body>
+</html>

@@ -47,3 +47,20 @@ scenarios:
         message_template: "请按选择的评审意见，先思考原因，再解决，再调试通过：\n{selected_items}"
         target: "current"
         requires_selection: true
+
+  # Ops Agent 错误清单场景 - 当 Droid Worker 返回日志分析结果时激活
+  ops_agent_confirm:
+    trigger: "[ops_agent_errors]"
+    title: "日志错误清单 - 选择需要修复的问题"
+    description: "Ops Agent 分析完成，选择需要修复的错误项目"
+    buttons:
+      - label: "取消"
+        action: "cancel"
+        style: "secondary"
+
+      - label: "修复选中问题"
+        action: "fix"
+        style: "primary"
+        message_template: "请逐个修复以下日志中发现的错误问题：\n{selected_items}"
+        target: "current"
+        requires_selection: true

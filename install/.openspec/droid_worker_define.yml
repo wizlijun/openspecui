@@ -60,3 +60,18 @@ modes:
           prompt_template: "/opsx-archive 并且总结做的变更，提交git"
           requires_input: true
       right: []
+
+  # 通用 Worker 模式（Ops Agent 使用）
+  general:
+    name: "General Worker"
+    description: "通用 Droid Worker，支持 Ops Agent 日志分析等场景"
+    auto_init_prompt: null
+    confirmation:
+      enabled: true
+    buttons:
+      left:
+        - label: "Fix"
+          role: "fix"
+          prompt_template: "请逐个修复以下问题：\n{input}"
+          requires_input: true
+      right: []
