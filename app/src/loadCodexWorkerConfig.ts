@@ -1,5 +1,14 @@
 import yaml from 'js-yaml'
 import type { CodexWorkerMode, CodexWorkerConfig, CodexQuickButton } from './CodexWorkerBase'
+import type { WorkerProxyConfig, YamlProxyConfig } from './workerProxy'
+import { mergeProxyConfigs, parseProxyConfig } from './workerProxy'
+
+const DEFAULT_CODEX_PROXY: WorkerProxyConfig = {
+  useProxy: true,
+  httpProxy: 'http://127.0.0.1:1087',
+  httpsProxy: 'http://127.0.0.1:1087',
+  noProxy: '127.0.0.1,localhost',
+}
 
 // Default fallback configs — mirrors codex_worker_define.yml so core actions
 // remain available during async config loading or on read failure.
@@ -12,6 +21,7 @@ export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> =
       { label: 'Review', role: 'review', prompt: '严格评审上次git提交之后修改代码和构建，只给评审建议，要求文法简洁、清晰、认知负荷低。结果按优先级P0、P1、P2排序，以todo的列表形式返回， 每一项的文本前面加上 P0/P1，例如 - [ ] P0 描述。请在返回结果最开始加上[fix_confirmation]', requiresInput: false },
     ],
     rightButtons: [],
+    proxy: DEFAULT_CODEX_PROXY,
   },
   code_review: {
     mode: 'code_review',
@@ -26,6 +36,7 @@ export const DEFAULT_CODEX_CONFIGS: Record<CodexWorkerMode, CodexWorkerConfig> =
     ],
     rightButtons: [],
     confirmation: { enabled: true, responseTemplate: '已确认以下评审项目：\n{selected_items}' },
+    proxy: DEFAULT_CODEX_PROXY,
   },
 }
 
@@ -47,6 +58,7 @@ interface YamlModeConfig {
   name: string
   description?: string
   auto_init_prompt?: string | null
+  proxy?: YamlProxyConfig
   buttons: {
     left?: YamlButtonConfig[]
     right?: YamlButtonConfig[]
@@ -55,6 +67,7 @@ interface YamlModeConfig {
 }
 
 interface YamlConfig {
+  proxy?: YamlProxyConfig
   modes: Record<string, YamlModeConfig>
 }
 
@@ -69,7 +82,11 @@ function parseButton(btn: YamlButtonConfig): CodexQuickButton {
   }
 }
 
-function parseModeConfig(mode: CodexWorkerMode, yamlMode: YamlModeConfig): CodexWorkerConfig {
+function parseModeConfig(
+  mode: CodexWorkerMode,
+  yamlMode: YamlModeConfig,
+  inheritedProxy?: WorkerProxyConfig,
+): CodexWorkerConfig {
   return {
     mode,
     name: yamlMode.name,
@@ -80,6 +97,7 @@ function parseModeConfig(mode: CodexWorkerMode, yamlMode: YamlModeConfig): Codex
       enabled: yamlMode.confirmation.enabled !== false,
       responseTemplate: yamlMode.confirmation.response_template,
     } : { enabled: true },
+    proxy: mergeProxyConfigs(inheritedProxy, parseProxyConfig(yamlMode.proxy)),
   }
 }
 
@@ -117,11 +135,12 @@ export async function loadCodexWorkerConfigs(projectPath: string): Promise<Recor
     }
 
     const configs: Record<CodexWorkerMode, CodexWorkerConfig> = { ...DEFAULT_CODEX_CONFIGS }
+    const fileProxy = parseProxyConfig(parsed.proxy)
     const modeKeys: CodexWorkerMode[] = ['standalone', 'code_review']
 
     for (const key of modeKeys) {
       if (parsed.modes[key]) {
-        configs[key] = parseModeConfig(key, parsed.modes[key])
+        configs[key] = parseModeConfig(key, parsed.modes[key], fileProxy)
       }
     }
 

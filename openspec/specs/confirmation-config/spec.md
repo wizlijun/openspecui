@@ -48,3 +48,30 @@ confirmation 配置 SHALL 通过现有的 `loadWorkerConfig.ts` 和 `loadCodexWo
 #### Scenario: 配置加载失败回退
 - **WHEN** 配置文件格式错误或不存在
 - **THEN** 系统 SHALL 回退到默认配置，`confirmation` 使用默认值（enabled: true，无自定义模板）
+
+### Requirement: YAML 配置支持 proxy 字段
+`droid_worker_define.yml` 和 `codex_worker_define.yml` SHALL 支持可选的 `proxy` 配置块，既可定义在文件顶层，也可定义在 `modes.<mode>` 下覆盖顶层默认值。
+
+#### Scenario: 顶层 proxy 配置应用到所有模式
+- **WHEN** 配置文件顶层包含如下配置：
+  ```yaml
+  proxy:
+    use_proxy: true
+    http_proxy: "http://127.0.0.1:1087"
+    https_proxy: "http://127.0.0.1:1087"
+    no_proxy: "127.0.0.1,localhost"
+  ```
+- **THEN** 系统 SHALL 解析该配置并将其作为同一文件内所有 Worker 模式的默认代理配置
+
+#### Scenario: mode 级 proxy 覆盖顶层默认值
+- **WHEN** 顶层定义了 `proxy`，且某个 `modes.<mode>.proxy` 也定义了部分字段
+- **THEN** 系统 SHALL 保留顶层未覆盖的字段
+- **THEN** 系统 SHALL 使用 mode 级字段覆盖同名顶层字段
+
+#### Scenario: use_proxy 为 false
+- **WHEN** `proxy.use_proxy` 为 `false`
+- **THEN** 系统 SHALL 将该 Worker 模式视为“不使用代理”
+
+#### Scenario: proxy 字段缺失
+- **WHEN** 顶层与 `modes.<mode>` 都未配置 `proxy`
+- **THEN** 系统 SHALL 让该 Worker 模式继承桌面进程当前环境变量中的代理设置

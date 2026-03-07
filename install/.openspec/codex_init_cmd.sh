@@ -1,14 +1,15 @@
 #!/bin/bash
 # OpenSpec Review Environment Setup
-# Sets up proxy and Codex notify hook for review terminal
+# Uses proxy env already prepared by the worker config and installs the Codex notify hook
 
 set -euo pipefail
 
-# Set proxy environment variables
-export http_proxy=http://127.0.0.1:1087
-export https_proxy=http://127.0.0.1:1087
-
-echo "✓ Proxy configured: $http_proxy"
+ACTIVE_PROXY="${https_proxy:-${http_proxy:-${HTTPS_PROXY:-${HTTP_PROXY:-${all_proxy:-${ALL_PROXY:-}}}}}}"
+if [[ -n "$ACTIVE_PROXY" ]]; then
+  echo "✓ Proxy configured: $ACTIVE_PROXY"
+else
+  echo "✓ Proxy disabled for Codex worker"
+fi
 
 # Setup .codex directory and notify hook
 CODEX_DIR=".codex"

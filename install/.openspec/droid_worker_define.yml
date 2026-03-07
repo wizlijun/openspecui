@@ -1,6 +1,16 @@
 # Droid Worker 配置定义
 # 定义不同模式下的按钮布局和行为
 
+# 代理配置：
+# - use_proxy: true  按下面的 proxy 地址启动 worker
+# - use_proxy: false 强制当前 worker 不走代理
+# - 删除整个 proxy 块     则继承桌面进程当前环境变量
+proxy:
+  use_proxy: true
+  http_proxy: "http://127.0.0.1:1087"
+  https_proxy: "http://127.0.0.1:1087"
+  no_proxy: "127.0.0.1,localhost"
+
 modes:
   # 新建 Change 模式
   new_change:

@@ -1,5 +1,14 @@
 import yaml from 'js-yaml'
 import type { WorkerMode, DroidWorkerConfig, QuickButton } from './DroidWorkerBase'
+import type { WorkerProxyConfig, YamlProxyConfig } from './workerProxy'
+import { mergeProxyConfigs, parseProxyConfig } from './workerProxy'
+
+const DEFAULT_WORKER_PROXY: WorkerProxyConfig = {
+  useProxy: true,
+  httpProxy: 'http://127.0.0.1:1087',
+  httpsProxy: 'http://127.0.0.1:1087',
+  noProxy: '127.0.0.1,localhost',
+}
 
 // Default fallback configs — mirrors droid_worker_define.yml so core actions
 // remain available during async config loading or on read failure.
@@ -12,6 +21,7 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     rightButtons: [
       { label: 'New Change', role: 'new_change', promptTemplate: '/opsx-new {input}', requiresInput: true },
     ],
+    proxy: DEFAULT_WORKER_PROXY,
   },
   continue_change: {
     mode: 'continue_change',
@@ -24,6 +34,7 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     ],
     rightButtons: [],
     confirmation: { enabled: true, responseTemplate: '已确认以下项目：\n{selected_items}' },
+    proxy: DEFAULT_WORKER_PROXY,
   },
   fix_review: {
     mode: 'fix_review',
@@ -35,6 +46,7 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
       { label: 'Finish', role: 'finish', promptTemplate: '/opsx-archive 并且总结做的变更，提交git', requiresInput: false },
     ],
     rightButtons: [],
+    proxy: DEFAULT_WORKER_PROXY,
   },
   general: {
     mode: 'general',
@@ -45,6 +57,7 @@ export const DEFAULT_WORKER_CONFIGS: Record<WorkerMode, DroidWorkerConfig> = {
     ],
     rightButtons: [],
     confirmation: { enabled: true },
+    proxy: DEFAULT_WORKER_PROXY,
   },
 }
 
@@ -66,6 +79,7 @@ interface YamlModeConfig {
   name: string
   description?: string
   auto_init_prompt?: string | null
+  proxy?: YamlProxyConfig
   buttons: {
     left?: YamlButtonConfig[]
     right?: YamlButtonConfig[]
@@ -74,6 +88,7 @@ interface YamlModeConfig {
 }
 
 interface YamlConfig {
+  proxy?: YamlProxyConfig
   modes: Record<string, YamlModeConfig>
 }
 
@@ -88,7 +103,11 @@ function parseButton(btn: YamlButtonConfig): QuickButton {
   }
 }
 
-function parseModeConfig(mode: WorkerMode, yamlMode: YamlModeConfig): DroidWorkerConfig {
+function parseModeConfig(
+  mode: WorkerMode,
+  yamlMode: YamlModeConfig,
+  inheritedProxy?: WorkerProxyConfig,
+): DroidWorkerConfig {
   return {
     mode,
     name: yamlMode.name,
@@ -99,6 +118,7 @@ function parseModeConfig(mode: WorkerMode, yamlMode: YamlModeConfig): DroidWorke
       enabled: yamlMode.confirmation.enabled !== false,
       responseTemplate: yamlMode.confirmation.response_template,
     } : { enabled: true },
+    proxy: mergeProxyConfigs(inheritedProxy, parseProxyConfig(yamlMode.proxy)),
   }
 }
 
@@ -136,11 +156,12 @@ export async function loadWorkerConfigs(projectPath: string): Promise<Record<Wor
     }
 
     const configs: Record<WorkerMode, DroidWorkerConfig> = { ...DEFAULT_WORKER_CONFIGS }
+    const fileProxy = parseProxyConfig(parsed.proxy)
     const modeKeys: WorkerMode[] = ['new_change', 'continue_change', 'fix_review', 'general']
 
     for (const key of modeKeys) {
       if (parsed.modes[key]) {
-        configs[key] = parseModeConfig(key, parsed.modes[key])
+        configs[key] = parseModeConfig(key, parsed.modes[key], fileProxy)
       }
     }
 

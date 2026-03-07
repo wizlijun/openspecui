@@ -5,6 +5,8 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { HumanConfirmationCard } from './HumanConfirmationCard'
 import type { ConfirmationCardConfig, ConfirmationButton, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
+import type { WorkerProxyConfig } from './workerProxy'
+import { prefixCommandWithProxy } from './workerProxy'
 
 const MAX_HISTORY = 200
 
@@ -40,6 +42,8 @@ export interface CodexWorkerConfig {
   rightButtons: CodexQuickButton[]
   /** Human confirmation card config */
   confirmation?: ConfirmationConfig
+  /** Optional proxy override for this worker mode. Undefined means inherit terminal env. */
+  proxy?: WorkerProxyConfig
 }
 
 // ─── Helper functions ──────────────────────────────────────────────
@@ -572,7 +576,7 @@ export function CodexWorkerBase({
       ].join('; ')
       bridge.runChangeCommandWithCallback(
         tabId,
-        checkAndSource,
+        prefixCommandWithProxy(checkAndSource, config.proxy, shellSingleQuote),
         `${tabId}-source`,
         'shell',
       )
@@ -600,7 +604,7 @@ export function CodexWorkerBase({
     }
     bridge.startChangeTerminal(tabId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge, tabId, projectPath, resumeSessionId, changeId, buildCodexStartCommand])
+  }, [bridge, tabId, projectPath, resumeSessionId, changeId, buildCodexStartCommand, config.proxy])
 
   // Cleanup — deps are intentionally empty: tabId is stable for the lifetime of the component,
   // and bridge is a global singleton. This ensures cleanup runs only on unmount.

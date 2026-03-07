@@ -5,6 +5,8 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { HumanConfirmationCard } from './HumanConfirmationCard'
 import type { ConfirmationCardConfig, ButtonAction } from './loadConfirmationCardConfig'
 import { detectScenario } from './loadConfirmationCardConfig'
+import type { WorkerProxyConfig } from './workerProxy'
+import { prefixCommandWithProxy } from './workerProxy'
 
 const MAX_HISTORY = 200
 
@@ -46,6 +48,8 @@ export interface DroidWorkerConfig {
   rightButtons: QuickButton[]
   /** Human confirmation card config */
   confirmation?: ConfirmationConfig
+  /** Optional proxy override for this worker mode. Undefined means inherit terminal env. */
+  proxy?: WorkerProxyConfig
 }
 
 // ─── Props ─────────────────────────────────────────────────────────
@@ -164,6 +168,7 @@ export function DroidWorkerBase({
   const taskIdRef = useRef<string | null>(null)
 
   const bridge = window.__nativeBridge
+  const shellSingleQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 
   // Reset when resetKey changes
   const prevResetKeyRef = useRef<number | undefined>(resetKey)
@@ -401,7 +406,12 @@ export function DroidWorkerBase({
         console.log(`[DroidWorkerBase:${tabId}] Droid prompt detected, waiting for SessionStart hook...`)
       }
       const droidCmd = isResumeMode ? `droid resume ${resumeSessionId}` : 'droid'
-      bridge.runChangeCommandWithCallback(tabId, droidCmd, `${tabId}-droid`, 'droid')
+      bridge.runChangeCommandWithCallback(
+        tabId,
+        prefixCommandWithProxy(droidCmd, config.proxy, shellSingleQuote),
+        `${tabId}-droid`,
+        'droid',
+      )
     }
 
     window.__onChangeCommandCallback[tabId] = (callbackId: string) => {
@@ -416,7 +426,7 @@ export function DroidWorkerBase({
               startDroid()
             }
           }
-          bridge.runChangeCommandWithCallback(tabId, `cd ${projectPath}`, `${tabId}-cd`, 'shell')
+          bridge.runChangeCommandWithCallback(tabId, `cd ${shellSingleQuote(projectPath)}`, `${tabId}-cd`, 'shell')
         } else {
           startDroid()
         }
@@ -425,7 +435,7 @@ export function DroidWorkerBase({
 
     bridge.startChangeTerminal(tabId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge, tabId, projectPath, resumeSessionId, changeId])
+  }, [bridge, tabId, projectPath, resumeSessionId, changeId, config.proxy])
 
   // Cleanup — deps are intentionally empty: tabId is stable for the lifetime of the component,
   // and bridge is a global singleton. This ensures cleanup runs only on unmount.

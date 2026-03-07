@@ -56,3 +56,20 @@ The user SHALL be able to drag the top edge of the agent panel to resize its hei
 - **WHEN** the user drags the top border of the agent panel
 - **THEN** the panel height SHALL adjust accordingly, with a minimum height of 150px and maximum of 70% viewport height
 
+### Requirement: Worker terminal SHALL apply proxy config from worker YAML
+When starting a Droid Worker or Codex Worker terminal, the system SHALL read the resolved `proxy` configuration from the corresponding worker YAML and apply it to the worker process environment.
+
+#### Scenario: use_proxy 为 true
+- **WHEN** Worker 配置中的 `proxy.use_proxy` 为 `true`
+- **THEN** 系统 SHALL 在启动该 Worker CLI 之前注入 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` 环境变量
+- **THEN** 该代理配置 SHALL 仅作用于当前 Worker 终端会话
+
+#### Scenario: use_proxy 为 false
+- **WHEN** Worker 配置中的 `proxy.use_proxy` 为 `false`
+- **THEN** 系统 SHALL 在启动该 Worker CLI 之前清除代理相关环境变量
+- **THEN** 该 Worker SHALL NOT 继承桌面进程中的代理设置
+
+#### Scenario: no_proxy 未显式包含本地回调地址
+- **WHEN** Worker 配置启用了代理，但 `proxy.no_proxy` 未显式包含 `127.0.0.1` 或 `localhost`
+- **THEN** 系统 SHALL 仍保证 `127.0.0.1,localhost` 被加入最终生效的 `no_proxy` / `NO_PROXY`
+- **THEN** 本地 hook / notify 回调 SHALL NOT 经过代理
